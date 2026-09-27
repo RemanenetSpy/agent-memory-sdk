@@ -125,18 +125,23 @@ The retriever gained two things while the Decision Safety Suite was being built:
 an expiry check on query-cache hits, and an optional `where` predicate (with a
 deeper-pool escalation) used by tenant-scoped views. Both are inert here — these
 haystacks set no TTL, and the benchmark passes no predicate — but "should be
-inert" is not a measurement, so the full 500-question lexical run was repeated
-against the published artifact:
+inert" is not a measurement, so **both configurations were re-run end to end**
+over all 500 questions and compared against the previous artifacts:
 
-| | Published | Re-run |
+| | Lexical | Semantic |
 |---|---|---|
-| All 45 accuracy metrics (overall + per type) | — | **identical** |
-| Query p50 / mean | 10.09ms / 9.94ms | 10.04ms / 9.97ms |
-| Ingest | 124,362 entries in 211.6s | 124,362 entries in 204.5s |
+| All 45 accuracy metrics (overall + per type) | **identical** | **identical** |
+| Query p50 — previous → re-run | 10.09ms → 10.04ms | 19.98ms → 19.56ms |
+| Ingest wall time — previous → re-run | 211.6s → 204.5s | 6,180.6s → 6,921.0s |
+| Entries ingested | 124,362 (unchanged) | 124,362 (unchanged) |
 
-Every recall, coverage, abstention, and false-abstention figure matched exactly.
-Latency and ingest time differ by run-to-run machine variance only; the entry
-count is identical. Accuracy numbers in this report therefore stand unchanged.
+Every recall, coverage, abstention, and false-abstention figure matched exactly
+in both configurations. Latency and ingest wall-time differ by run-to-run machine
+variance in both directions — lexical ingest was 3% faster, semantic 12% slower —
+while the entry count is identical, which rules out any change in what was
+indexed. The re-run artifacts replace the previous ones because they also carry
+the full latency percentiles and the `execution` telemetry block; accuracy
+numbers throughout this report stand unchanged.
 
 ## Results
 
@@ -155,27 +160,32 @@ hybrid RRF fusion; embedding input truncated to 1,000 chars).
 | multi-session R@5 | 95.9% | **99.2%** |
 | Abstention → NONE | 1/30 | **11/30** |
 | Abstention → wrong REPLAY | 2/30 | **0/30** |
-| Retrieval latency p50 / p95 / mean | 10.04 / 12.95 / 9.97ms | 19.98 / 32.59 / 23.31ms |
-| Retrieval latency p90 / p99 | 11.85 / 20.21ms | not in the committed artifact — see note |
-| Ingestion (124,362 entries) | 204.5s · 608.0/s · $0 | 6,180.6s · 20.1/s · $0 |
-| Whole-run wall time | 215.23s | not in the committed artifact |
-| Whole-run CPU (user + system) | 166.37s + 37.56s | not in the committed artifact |
-| Process peak RSS | 2,661.36MiB | not in the committed artifact |
+| Retrieval latency p50 / p90 / p95 / p99 | 10.04 / 11.85 / 12.95 / 20.21ms | 19.56 / 25.61 / 29.03 / 41.28ms |
+| Ingestion (124,362 entries) | 204.5s · 608.0/s · $0 | 6,921.0s · 18.0/s · $0 |
+| Whole-run wall time | 215.23s | 6,940.60s |
+| Whole-run CPU (user + system) | 166.37s + 37.56s | 32,202.15s + 286.40s |
+| Process peak RSS | 2,661.36MiB | 3,335.83MiB |
 
 **Provenance of this table.** Every lexical figure comes from
-`results_lexical_500q_final.json`, and every semantic accuracy and
-latency/ingestion figure from `results_semantic_500q_final.json` — one run per
-column, so the table is reproducible from this directory as claimed above.
+`results_lexical_500q_final.json` and every semantic figure from
+`results_semantic_500q_final.json` — accuracy, latency, and resources from the
+same run in each column, so the table is reproducible from this directory as
+claimed above.
 
-An earlier revision of this table quoted lexical p50 9.77ms and semantic
-p50 19.44ms with whole-run CPU and RSS figures. Those came from a *different*
-run of the same configurations whose telemetry was never committed, so they were
-not checkable from this repository; mixing them with accuracy numbers from the
-committed artifacts also broke this report's own measurement contract. They have
-been replaced with the committed values. The semantic artifact predates the
-runner's `execution` telemetry block and its p90/p99 percentiles, which is why
-those cells now say so instead of carrying a number; a full semantic re-run is in
-progress and those cells will be filled from its committed artifact.
+An earlier revision quoted lexical p50 9.77ms and semantic p50 19.44ms with
+whole-run CPU and a 9,453.72MiB semantic peak RSS. Those came from *different*
+runs of the same configurations whose telemetry was never committed — the
+semantic figures were not present in any file in this repository — and mixing
+them with accuracy numbers from the committed artifacts broke this report's own
+measurement contract. Both configurations were therefore re-run end to end and
+their complete artifacts committed. **All 45 accuracy metrics in both
+configurations came back identical to the previous artifacts**; only latency,
+ingest wall-time, and resource figures moved, which is why those are the only
+numbers in this table that changed.
+
+The semantic peak RSS is the clearest difference: 3,335.83MiB measured here
+against the 9,453.72MiB previously quoted, consistent with the older figure
+coming from the pre-batching harness with an unbounded cross-haystack cache.
 
 Per question type (Recall@5, lexical → semantic):
 
@@ -208,18 +218,18 @@ multi-session questions, which need up to 5 distinct sessions).
 | Metric | Value | Source |
 |---|---|---|
 | Lexical retrieval latency | p50 10.04ms · p90 11.85ms · p95 12.95ms · p99 20.21ms | `results_lexical_500q_final.json` |
-| Semantic retrieval latency | p50 19.98ms · p95 32.59ms · mean 23.31ms | `results_semantic_500q_final.json` |
+| Semantic retrieval latency | p50 19.56ms · p90 25.61ms · p95 29.03ms · p99 41.28ms | `results_semantic_500q_final.json` |
 | Lexical whole run | 215.23s wall · 203.93s CPU · 2,661.36MiB peak RSS | `results_lexical_500q_final.json` |
-| Semantic whole run | re-run in progress; the committed artifact predates the `execution` telemetry block | — |
+| Semantic whole run | 6,940.60s wall · 32,488.55s CPU · 3,335.83MiB peak RSS | `results_semantic_500q_final.json` |
 | Ingestion | 124,362 entries · **0 LLM calls · $0.00 API cost** | both artifacts |
 | Decision (resolve) false-abstention rate | 1.9% (lexical) · 16.2% (semantic) | both artifacts |
 
-> **Resource interpretation:** an earlier revision of this report quoted a
-> semantic peak of 9,453.72MiB from the pre-batching, multi-store harness with an
-> unbounded cross-haystack cache. That figure was never committed as an artifact,
-> so it has been removed rather than restated; the current runner bounds or
-> disables that cache and batches vector backfill. The persistent-store profiles
-> below are the relevant SDK memory measure in any case.
+> **Resource interpretation:** semantic mode's cost is CPU, not memory —
+> 32,488.55s of CPU across a 6,940.60s wall-clock run (local ONNX inference over
+> 124,362 entries, parallel across cores) against a 3,335.83MiB peak. These are
+> whole-run ingestion figures for 500 independent stores and must not be read as
+> per-query serving cost. The persistent-store profiles below are the relevant
+> measure of what one store actually costs to keep.
 
 ### Persistent-store memory profiles
 
@@ -253,11 +263,23 @@ temporary stores in 33.9 minutes, still 0 LLM calls).
 | Contriever, best key design (paper [1]) | 76.2% | 86.2% |
 | **agent-memory-sdk, lexical, cleaned release, turn-pair index** | **87.0%** | **91.7%** |
 
-Per-query retrieval stayed fast: **p50 12.10ms / p90 14.20ms / p95 14.73ms /
-p99 16.23ms** against ~2,500-entry stores. The complete run used **2,053.84s
-wall time**, **1,592.85s user CPU + 373.26s system CPU**, and **182.50MiB process
-peak RSS**. These are per-haystack stores, so they are not measurements of a
-shared 1.23M-entry database.
+Per-query retrieval stayed fast: **p50 12.05ms / p90 14.34ms / p95 15.09ms /
+p99 36.98ms** against ~2,500-entry stores, ingesting 1,233,412 entries in
+**1,945.4s** (634.0/s, 0 LLM calls, $0). The complete run used **1,958.0s wall
+time**, **1,557.52s user CPU + 322.06s system CPU**, and a **13,942.30MiB process
+peak RSS** — all from `results_lexical_M_500q.json`. These are 500 per-haystack
+stores, so they are not measurements of a shared 1.23M-entry database.
+
+**Correction, and it is not a flattering one.** An earlier revision of this
+section quoted a **182.50MiB** peak RSS for this run, along with p50 12.10ms and
+2,053.84s wall time. None of those were in any committed artifact. Re-running `_M`
+end to end produced identical accuracy on every metric, but a peak RSS of
+13,942.30MiB — **76× higher** than the figure this report used to print. The
+measured number is the credible one: `_M` ingests 9.9× the entries of `_S` and
+peaks at 5.2× its RSS, a sane sublinear scaling, whereas 182.50MiB would have
+been 14.6× *smaller* than the ten-times-smaller `_S` run. See
+[known limitations](#known-limitations) — the harness's memory growth across 500
+sequential stores is now a tracked issue rather than a number nobody could check.
 
 Published-baseline context, not a head-to-head:
 
@@ -336,6 +358,15 @@ detection belongs to the semantic or LLM/verification layer.
   need per-scoring-mode calibration; retrieval results are unaffected.
 - The SDK's own adversarial suite stands at **34/36 (94.4%)**; both misses return
   VERIFY (memory is never used without validation) rather than a wrong REPLAY.
+- **The harness accumulates memory across sequential stores.** The `_M` run peaks
+  at 13,942.30MiB while ingesting 1.23M entries into 500 temporary stores — about
+  28MiB retained per store that is never returned to the OS. `_S` shows the same
+  shape at a smaller scale (2,661.36MiB over 500 stores). This is a property of
+  the benchmark harness, which opens 500 stores in one process, **not** of a
+  single SDK store: the persistent-store profiles above are the relevant
+  per-store measure. It still needs fixing, because it caps how large a haystack
+  set one process can ingest. Closing each store and its SQLite connection
+  between questions is the first thing to try.
 
 ## Roadmap
 

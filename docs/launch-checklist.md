@@ -67,7 +67,7 @@ Body structure (in this order):
    explicit REPLAY / RESTORE / VERIFY / NONE decision instead of silently
    injecting context.
 2. The measured card: **87.0% session Recall@5 on cleaned LongMemEval_M** with
-   turn-pair indexing, zero LLM calls, and 12.10ms p50 against ~2,500-entry
+   turn-pair indexing, zero LLM calls, and 12.05ms p50 against ~2,500-entry
    haystacks. State that this is a retrieval proxy, not a paper-baseline or
    end-to-end comparison. Link the
    [benchmark report](../benchmarks/longmemeval/REPORT.md).

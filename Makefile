@@ -25,7 +25,7 @@ help:
 	@echo "  benchmark     Run quick benchmark"
 	@echo "  benchmark-full Run full benchmark with seeded data"
 	@echo "  eval          Run evaluation datasets"
-	@echo "  stress-charts Regenerate stress-test charts from benchmark data"
+	@echo "  stress-charts Regenerate stress-test charts (needs: pip install -e '.[charts]')"
 	@echo ""
 	@echo "Docker:"
 	@echo "  docker-build  Build Docker image"
@@ -77,8 +77,9 @@ benchmark-full:
 eval:
 	agent-memory eval
 
+# Requires the optional charts extra: pip install -e ".[charts]"
 stress-charts:
-	uv run python scripts/generate_stress_charts.py
+	uv run --extra charts python scripts/generate_stress_charts.py
 
 # Docker
 docker-build:

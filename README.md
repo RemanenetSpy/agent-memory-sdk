@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/TheProdSDE/agent-memory-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/TheProdSDE/agent-memory-sdk/actions)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 [![PyPI version](https://img.shields.io/pypi/v/agent-memory-sdk.svg)](https://pypi.org/project/agent-memory-sdk/)
 [![MCP Registry](https://badge.mcpx.dev?type=server&name=io.github.theprodsde%2Fagent-memory)](https://registry.modelcontextprotocol.io/servers/io.github.theprodsde/agent-memory)
 
@@ -124,12 +124,12 @@ charges**:
 
 - **LongMemEval_S** (500 independent ~48-session haystacks; 124K turn-pair
   entries across all runs): **98.1% session Recall@5** with local ONNX
-  embeddings, 96.0% lexical-only, 10.04ms lexical / 19.98ms semantic p50
+  embeddings, 96.0% lexical-only, 10.04ms lexical / 19.56ms semantic p50
   retrieval. The report includes p90/p95/p99 and run-resource measurements.
 
 - **LongMemEval_M** (500 independent ~500-session haystacks; ~2,500 turn-pair
   entries per queried store): **87.0% session Recall@5** with lexical retrieval,
-  12.10ms p50. This uses the official cleaned re-release and turn-pair indexing;
+  12.05ms p50. This uses the official cleaned re-release and turn-pair indexing;
   it is not directly comparable with the paper's original-release session-index
   baselines.
 
@@ -533,7 +533,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)** for dev setup, test commands, and the
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE).
 
 ---
 
