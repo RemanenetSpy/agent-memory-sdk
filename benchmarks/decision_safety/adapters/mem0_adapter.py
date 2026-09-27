@@ -1,24 +1,20 @@
 """Decision Safety Suite v2 adapter for self-hosted Mem0 — pending maintainer review.
 
-Deliberately not runnable yet. The capability declaration and the config below
-are **our reading** of the OSS API, not Mem0's, and the whole point of
-[mem0ai/mem0#7453](https://github.com/mem0ai/mem0/issues/7453) is to have the
-maintainers confirm or correct it before any comparative number exists. Setting
-``PENDING_MAINTAINER_REVIEW = False`` with unverified values would produce
-exactly the marketing-driven comparison the RFC exists to prevent.
+Deliberately not runnable, and deliberately declares **no capabilities**.
 
-What we need confirmed before this runs:
+An earlier draft of this file guessed at Mem0's capability declaration. Checking
+those guesses against the source showed at least two were wrong (see
+`OBSERVED` below), which is exactly the failure mode
+[mem0ai/mem0#7453](https://github.com/mem0ai/mem0/issues/7453) exists to prevent.
+So this adapter declares nothing: ``capabilities`` stays empty, the runner's
+``validate_declaration()`` refuses it, and no Mem0 number can be produced from
+this repository until the maintainers confirm the configuration.
 
-1. The canonical self-hosted configuration: retrieval unit, vector store,
-   embedding model, and LLM used at ingest and at query time.
-2. Whether ``delete_all`` is the right ``delete_scope`` mapping, and what the
-   expected behaviour is for raw session messages after it
-   ([#7452](https://github.com/mem0ai/mem0/issues/7452)) — the
-   ``deletion_durability`` battery inspects retained raw turns directly.
-3. Whether any point-in-time read path exists, or whether ``point_in_time``
-   should be declared ``unsupported`` (as it is for our own SDK).
-4. Whether ``user_id`` / ``agent_id`` / ``run_id`` is the intended mapping for
-   battery scopes, and which of them isolates retrieval rather than only listing.
+``OBSERVED`` records only things read directly out of Mem0's own source or an
+upstream issue, with the location, so a maintainer can correct a specific line
+rather than a vibe. They are observations about one revision, not verdicts about
+the project, and they are **not** a capability declaration — deciding how each
+one maps onto a battery capability is the maintainers' call.
 """
 
 from __future__ import annotations
@@ -34,16 +30,50 @@ from benchmarks.decision_safety.adapters.base import (
 
 PENDING_MAINTAINER_REVIEW = True
 
-#: Draft only. Every value here is a question for the maintainers, not a claim.
+#: Read from mem0ai/mem0 on 2026-09-27. Each entry cites where it came from.
+OBSERVED: dict[str, dict[str, str]] = {
+    "scope_identity": {
+        "observation": "delete_all(user_id=None, agent_id=None, run_id=None) — three "
+        "independent scope ids, any of which can key a scope-wide delete.",
+        "source": "mem0/memory/main.py, def delete_all",
+        "question": "Which of the three should a battery scope map to, and which of "
+        "them isolates retrieval rather than only listing?",
+    },
+    "expiration": {
+        "observation": "add(..., expiration_date=...) accepts YYYY-MM-DD and expired "
+        "memories are hidden, so there is day-granularity expiry.",
+        "source": "mem0/memory/main.py, _normalize_expiration_date and add()",
+        "question": "The ttl_expiry battery advances a virtual clock by seconds. Is "
+        "day-granularity expiry testable here, or should the battery declare a "
+        "coarser clock for Mem0?",
+    },
+    "change_log": {
+        "observation": "history(memory_id) exists and add_history() records ADD / "
+        "UPDATE / DELETE events per memory.",
+        "source": "mem0/memory/main.py, def history and add_history call sites",
+        "question": "Does that change log make a deleted memory unreachable from "
+        "retrieval (a tombstone), or is it an audit trail only?",
+    },
+    "raw_messages_after_delete_all": {
+        "observation": "delete_all() does not clear the scope's rows in the history "
+        "DB's messages table, and those messages are re-sent to the LLM on the next "
+        "add(), where they can be re-extracted. Reported with a stubbed-LLM repro.",
+        "source": "upstream issue mem0ai/mem0#7452 (open), reported against main @ a39a802b",
+        "question": "Is this the expected behaviour pending a fix? The "
+        "deletion_durability battery inspects retained raw turns directly, so this "
+        "is the difference between a reported capability and a reported defect.",
+    },
+}
+
+#: Every value here is a question for the maintainers, not a claim.
 DRAFT_CONFIG: dict[str, Any] = {
     "deployment": "self_hosted",
-    "retrieval_unit": "fact",
+    "version": "TBD — pin a release tag or commit SHA",
+    "retrieval_unit": "TBD",
     "vector_store": "TBD",
     "embedding_model": "TBD",
     "llm_at_ingest": "TBD",
     "llm_at_query": "TBD",
-    "scope_mapping": "user_id (to be confirmed; agent_id/run_id may be more appropriate)",
-    "delete_scope_mapping": "delete_all(user_id=...) (to be confirmed)",
 }
 
 
@@ -56,30 +86,22 @@ class Mem0Adapter(DecisionSafetyAdapter):
     version = "unpinned"
     deployment = "self_hosted"
 
-    #: Placeholders. Not to be published until confirmed on #7453.
-    capabilities = {
-        "delete_by_id": "supported",
-        "delete_scope": "supported",
-        "tombstones": "unsupported",
-        "raw_message_store": "retained",
-        "ttl": "unsupported",
-        "explicit_supersession": "partial",
-        "as_of_query": "unsupported",
-        "explicit_abstention": "unsupported",
-    }
+    #: Intentionally empty. See the module docstring: we do not publish a
+    #: capability declaration for someone else's project.
+    capabilities: dict[str, str] = {}
 
     notes = [
-        "Capability declaration is unreviewed; see mem0ai/mem0#7453.",
-        "No comparative Mem0 result is publishable from this adapter until the "
-        "maintainers confirm the self-hosted configuration.",
+        "No capability declaration: awaiting maintainer confirmation on mem0ai/mem0#7453.",
+        "No comparative Mem0 result is publishable from this adapter.",
     ]
 
     def __init__(self) -> None:
         if PENDING_MAINTAINER_REVIEW:
             raise PendingMaintainerReview(
                 "The Mem0 adapter is a stub awaiting maintainer confirmation of the "
-                "canonical self-hosted configuration (mem0ai/mem0#7453). Pin a version, "
-                "fill DRAFT_CONFIG, implement the ops, and set "
+                "canonical self-hosted configuration (mem0ai/mem0#7453). To finish it: "
+                "pin a version, fill DRAFT_CONFIG, resolve each question in OBSERVED "
+                "into a declared capability, implement the ops, and set "
                 "PENDING_MAINTAINER_REVIEW = False in the same commit."
             )
 
@@ -91,6 +113,7 @@ class Mem0Adapter(DecisionSafetyAdapter):
         human: str,
         assistant: str,
         at: datetime | None = None,
+        ttl: int | None = None,
     ) -> WriteOutcome:
         raise NotImplementedError("awaiting confirmed Mem0 configuration")
 

@@ -155,11 +155,27 @@ hybrid RRF fusion; embedding input truncated to 1,000 chars).
 | multi-session R@5 | 95.9% | **99.2%** |
 | Abstention → NONE | 1/30 | **11/30** |
 | Abstention → wrong REPLAY | 2/30 | **0/30** |
-| Retrieval latency p50 / p90 / p95 / p99 | 9.77 / 11.21 / 12.29 / 15.87ms | 19.44 / 24.74 / 26.09 / 63.16ms |
-| Ingestion (124,362 entries) | 188.9s · 658.3/s · $0 | 6,054.4s · 20.5/s · $0 |
-| Whole-run wall time | 198.86s | 6,070.93s |
-| Whole-run CPU (user + system) | 156.34s + 35.56s | 28,343.17s + 156.02s |
-| Process peak RSS | 2,922.05MiB | 9,453.72MiB |
+| Retrieval latency p50 / p95 / mean | 10.04 / 12.95 / 9.97ms | 19.98 / 32.59 / 23.31ms |
+| Retrieval latency p90 / p99 | 11.85 / 20.21ms | not in the committed artifact — see note |
+| Ingestion (124,362 entries) | 204.5s · 608.0/s · $0 | 6,180.6s · 20.1/s · $0 |
+| Whole-run wall time | 215.23s | not in the committed artifact |
+| Whole-run CPU (user + system) | 166.37s + 37.56s | not in the committed artifact |
+| Process peak RSS | 2,661.36MiB | not in the committed artifact |
+
+**Provenance of this table.** Every lexical figure comes from
+`results_lexical_500q_final.json`, and every semantic accuracy and
+latency/ingestion figure from `results_semantic_500q_final.json` — one run per
+column, so the table is reproducible from this directory as claimed above.
+
+An earlier revision of this table quoted lexical p50 9.77ms and semantic
+p50 19.44ms with whole-run CPU and RSS figures. Those came from a *different*
+run of the same configurations whose telemetry was never committed, so they were
+not checkable from this repository; mixing them with accuracy numbers from the
+committed artifacts also broke this report's own measurement contract. They have
+been replaced with the committed values. The semantic artifact predates the
+runner's `execution` telemetry block and its p90/p99 percentiles, which is why
+those cells now say so instead of carrying a number; a full semantic re-run is in
+progress and those cells will be filled from its committed artifact.
 
 Per question type (Recall@5, lexical → semantic):
 
@@ -187,22 +203,23 @@ embedding model correctly scores "visiting parts of Asia" as a weak match for
 *Coverage@k*: fraction of a question's evidence sessions found (matters for
 multi-session questions, which need up to 5 distinct sessions).
 
-**Verified resource measurements:**
+**Resource measurements** — each value from the committed artifact named beside it:
 
-| Metric | Value |
-|---|---|
-| Lexical retrieval latency | p50 9.77ms · p90 11.21ms · p95 12.29ms · p99 15.87ms |
-| Semantic retrieval latency | p50 19.44ms · p90 24.74ms · p95 26.09ms · p99 63.16ms |
-| Lexical whole run | 198.86s wall · 191.90s CPU · 2,922.05MiB peak RSS |
-| Semantic whole run | 6,070.93s wall · 28,499.19s CPU · 9,453.72MiB peak RSS |
-| Ingestion | 124,362 entries · **0 LLM calls · $0.00 API cost** |
-| Decision (resolve) false-abstention rate | 1.9% |
+| Metric | Value | Source |
+|---|---|---|
+| Lexical retrieval latency | p50 10.04ms · p90 11.85ms · p95 12.95ms · p99 20.21ms | `results_lexical_500q_final.json` |
+| Semantic retrieval latency | p50 19.98ms · p95 32.59ms · mean 23.31ms | `results_semantic_500q_final.json` |
+| Lexical whole run | 215.23s wall · 203.93s CPU · 2,661.36MiB peak RSS | `results_lexical_500q_final.json` |
+| Semantic whole run | re-run in progress; the committed artifact predates the `execution` telemetry block | — |
+| Ingestion | 124,362 entries · **0 LLM calls · $0.00 API cost** | both artifacts |
+| Decision (resolve) false-abstention rate | 1.9% (lexical) · 16.2% (semantic) | both artifacts |
 
-> **Resource interpretation:** the semantic 9,453.72MiB peak above came from
-> the pre-batching, multi-store LongMemEval harness with an unbounded
-> cross-haystack cache. It is retained for run provenance, not as a product
-> memory requirement. The current runner bounds/disables that cache and batches
-> vector backfill; persistent-store profiles below are the relevant SDK measure.
+> **Resource interpretation:** an earlier revision of this report quoted a
+> semantic peak of 9,453.72MiB from the pre-batching, multi-store harness with an
+> unbounded cross-haystack cache. That figure was never committed as an artifact,
+> so it has been removed rather than restated; the current runner bounds or
+> disables that cache and batches vector backfill. The persistent-store profiles
+> below are the relevant SDK memory measure in any case.
 
 ### Persistent-store memory profiles
 

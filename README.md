@@ -83,15 +83,21 @@ a semantic cache (GPTCache) for replay, a memory layer (Mem0 / Zep) for context,
 custom staleness logic for verification. No existing tool decides — at read time —
 *whether and how* a memory should be used.
 
+Cells about other projects are capability checks against their own source or
+docs (mem0 checked on 2026-09-27), not measured behaviour; `❔` means we have not
+tested it rather than that it is absent. Corrections welcome — see
+[docs/comparison.md](docs/comparison.md) for sourcing and the
+[benchmark RFC](docs/competitive-benchmark-rfc.md) for the review process.
+
 | Capability | Mem0 | Zep / Graphiti | Letta (MemGPT) | GPTCache | **Agent Memory** |
 |---|---|---|---|---|---|
 | Read-time decision (replay / inject / verify / skip) | ❌ always injects | ❌ always injects | ⚠️ LLM self-manages | ⚠️ replay only | ✅ REPLAY / RESTORE / VERIFY / NONE |
 | Explainable per-decision scores | ❌ | ❌ | ❌ | ❌ | ✅ `decision.explain()` |
 | Semantic answer cache (skip the LLM call) | ❌ | ❌ | ❌ | ✅ | ✅ |
-| Staleness protection at read time | ⚠️ write-side updates | ✅ temporal graph | ❌ | ⚠️ eviction only | ✅ VERIFY + TTL + confidence decay |
-| Adversarial trap-query eval published | ❌ | ❌ | ❌ | ❌ | ✅ 34/36 (94%) |
+| Staleness protection at read time | ⚠️ write-side updates + `expiration_date` | ✅ temporal graph | ❌ | ⚠️ eviction only | ✅ VERIFY + TTL + confidence decay |
+| Adversarial trap-query eval published | ❔ none found | ❔ none found | ❔ none found | ❔ none found | ✅ 34/36 (94%) |
 | LLM / API calls per memory op | 1+ | 1+ | 1+ | 0 | **0** |
-| Local after model assets are installed/cached, zero API keys | ❌ cloud-first | ⚠️ needs server + LLM | ⚠️ LLM per op | ✅ | ✅ SQLite + local ONNX |
+| Local after model assets are installed/cached, zero API keys | ⚠️ self-hostable; needs an LLM for extraction | ⚠️ needs server + LLM | ⚠️ LLM per op | ✅ | ✅ SQLite + local ONNX |
 | Paged context tiers (MemGPT-style) | ❌ | ❌ | ✅ | ❌ | ✅ `memory.paged()` |
 
 Because hosted or model-backed configurations can add an LLM or embedding API
@@ -118,7 +124,7 @@ charges**:
 
 - **LongMemEval_S** (500 independent ~48-session haystacks; 124K turn-pair
   entries across all runs): **98.1% session Recall@5** with local ONNX
-  embeddings, 96.0% lexical-only, 9.77ms lexical / 19.44ms semantic p50
+  embeddings, 96.0% lexical-only, 10.04ms lexical / 19.98ms semantic p50
   retrieval. The report includes p90/p95/p99 and run-resource measurements.
 
 - **LongMemEval_M** (500 independent ~500-session haystacks; ~2,500 turn-pair

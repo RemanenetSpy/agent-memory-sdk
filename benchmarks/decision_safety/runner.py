@@ -816,9 +816,16 @@ def _load_adapter(
             kwargs["restore_threshold"] = restore_threshold
         return AgentMemoryAdapter(**kwargs)
     if name == "mem0":
-        from benchmarks.decision_safety.adapters.mem0_adapter import Mem0Adapter
+        from benchmarks.decision_safety.adapters.mem0_adapter import (
+            Mem0Adapter,
+            PendingMaintainerReview,
+        )
 
-        return Mem0Adapter()
+        try:
+            return Mem0Adapter()
+        except PendingMaintainerReview as exc:
+            # Not a crash: refusing to run is the adapter's designed behaviour.
+            raise SystemExit(f"mem0 adapter unavailable: {exc}") from None
     raise SystemExit(f"unknown adapter {name!r} (choices: agent-memory, mem0)")
 
 

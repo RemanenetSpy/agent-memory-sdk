@@ -50,9 +50,13 @@ Synthetic scaling data is a supplement, not a headline-quality claim.
 - A local SDK is compared with each project's self-hosted or OSS deployment.
 - Hosted results, if included, are reported in a separate table with network
   latency and API cost.
-- Archived, retired, or unsupported implementations are ineligible. Adapters
-  must target each project's current maintainers-supported codebase; for Letta,
-  that means `letta-ai/letta-code`, not the archived `letta-ai/letta` server.
+- Archived, retired, or unsupported implementations are ineligible. Adapters must
+  target each project's current maintainer-supported codebase, and the result
+  artifact records which repository and commit was used. Where a project ships
+  more than one active codebase — Letta, for example, maintains both the
+  `letta-ai/letta` server platform and the `letta-ai/letta-code` agent, neither
+  of which is archived — the choice is stated in the artifact and put to that
+  project's maintainers for confirmation rather than decided by us.
 - Each adapter declares model providers, embedding models, external services,
   cache state, and whether LLM calls are used during ingestion or retrieval.
 - Maintainers may submit an adapter or a configuration correction. The suite

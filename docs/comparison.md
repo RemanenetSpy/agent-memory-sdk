@@ -25,16 +25,25 @@ Two observations from this table:
 
 ## Feature matrix
 
+**How to read this table.** Cells about other projects describe *capabilities*
+checked against that project's own source or docs, dated below — not measured
+behaviour. Where we have not run the system ourselves, the cell says
+`❔ not measured` rather than `❌`; an absent feature and an untested one are
+different claims. Capability checks for this revision were made on 2026-09-27
+(mem0 against `mem0/memory/main.py` on `main`). Corrections from maintainers are
+welcome and will be applied — see the
+[benchmark RFC](competitive-benchmark-rfc.md) for the review process.
+
 | Dimension | Redis (raw) | mem0 | Zep | LangMem | LlamaIndex memory | ChromaDB / Pinecone | MemGPT / Letta | **agent-memory-sdk** |
 |-----------|-------------|------|-----|---------|-------------------|---------------------|----------------|----------------------|
 | **Core model** | Key-value; no memory schema | Entity extraction + vector store; user/session hierarchy | Conversation turns + entity graph + vector search | Message history + LLM-driven summary/extraction | Chat buffer or LLM-summarised window | Embedding vectors; chunk-level similarity | Paged context: main + archival + recall tiers | query→response experience pairs; typed + scoped |
 | **Decision intelligence** | ❌ None — caller decides everything | ❌ None — always retrieves; caller decides | ❌ None — inject is caller's job | ⚠️ Partial — LLM decides what to compress | ❌ None — returns window contents | ❌ None — nearest neighbours regardless of relevance | ⚠️ Partial — LLM function calls move data between tiers | ✅ Explicit: REPLAY / RESTORE / VERIFY / NONE with scored rationale |
 | **Explainability** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ `decision.explain()` → per-component scores + reason tags |
-| **Trap-query protection** | ❌ | ❌ shared-word false positives | ❌ | ❌ | ❌ | ❌ | ⚠️ LLM judgment | ✅ 34/36 adversarial trap cases; misses fail safe to VERIFY, never wrong REPLAY |
-| **Local / offline** | ✅ self-hosted | ❌ cloud-first | ⚠️ open-source but needs server + OpenAI | ⚠️ needs LLM provider | ⚠️ needs LLM provider | ✅ self-hostable | ⚠️ heavy; LLM call per op | ✅ SQLite + ONNX MiniLM, zero API keys; workload-specific latency |
+| **Trap-query protection** | ❔ not measured | ❔ not measured | ❔ not measured | ❔ not measured | ❔ not measured | ❔ not measured | ❔ not measured | ✅ 34/36 adversarial trap cases; misses fail safe to VERIFY, never wrong REPLAY |
+| **Local / offline** | ✅ self-hosted | ⚠️ self-hostable (local vector store + local LLM); cloud is the documented default | ⚠️ open-source but needs server + OpenAI | ⚠️ needs LLM provider | ⚠️ needs LLM provider | ✅ self-hostable | ⚠️ heavy; LLM call per op | ✅ SQLite + ONNX MiniLM, zero API keys; workload-specific latency |
 | **Confidence / trust model** | ❌ | ❌ | ❌ | ❌ | ❌ | Cosine only | ❌ | ✅ per-entry confidence; event-driven updates; half-life decay |
 | **Verification semantics** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ `requires_verification=True` → always VERIFY, never silent replay |
-| **TTL / expiry** | ✅ native | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ any entry; `ttl="30d"` / `ttl=3600` |
+| **TTL / expiry** | ✅ native | ✅ `expiration_date` (day granularity; expired memories hidden) | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ any entry, second granularity; `ttl="30d"` / `ttl=3600` |
 | **Multi-agent isolation** | Manual prefix | User/agent hierarchy | Session-scoped | ❌ | ❌ | Manual collection | ❌ | ✅ NAMESPACED / ISOLATED / SHARED; broadcast; transfer |
 | **Memory graph** | ❌ | Internal entity graph | ✅ entity + knowledge graph | ❌ | ❌ | ❌ | ❌ | ✅ similarity + tag edges; BFS; clusters; PageRank |
 | **Entity extraction** | ❌ | ✅ auto from conversation | ✅ auto from conversation | ⚠️ LLM-dependent | ❌ | ❌ | ✅ | ✅ `memory.from_conversation(human, assistant)` auto-extracts facts, preferences, entities |

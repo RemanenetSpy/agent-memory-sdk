@@ -1,6 +1,6 @@
 # Makefile for Agent Memory Development
 
-.PHONY: help install test lint typecheck format benchmark eval stress-charts update-perf clean docker-build docker-run docker-mcp
+.PHONY: help install test lint typecheck format benchmark eval stress-charts clean docker-build docker-run docker-mcp
 
 # Default target
 help:
@@ -26,7 +26,6 @@ help:
 	@echo "  benchmark-full Run full benchmark with seeded data"
 	@echo "  eval          Run evaluation datasets"
 	@echo "  stress-charts Regenerate stress-test charts from benchmark data"
-	@echo "  update-perf   Rewrite README.md performance tables from benchmark data"
 	@echo ""
 	@echo "Docker:"
 	@echo "  docker-build  Build Docker image"
@@ -80,9 +79,6 @@ eval:
 
 stress-charts:
 	uv run python scripts/generate_stress_charts.py
-
-update-perf:
-	uv run python scripts/update_readme_perf.py
 
 # Docker
 docker-build:

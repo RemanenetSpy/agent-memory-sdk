@@ -16,7 +16,7 @@
     "os": "macOS",
     "hardware": "M-series MacBook",
     "python": "3.13.13",
-    "command": "uv run python benchmarks/longmemeval/run_retrieval.py --checkpoint /tmp/agent-memory-longmemeval-s-lexical.checkpoint.json --out /tmp/agent-memory-longmemeval-s-lexical-telemetry.json"
+    "command": "uv run python benchmarks/longmemeval/run_retrieval.py --out benchmarks/longmemeval/results_lexical_500q_final.json"
   },
   "configuration": {
     "top_k": 10,
@@ -29,13 +29,13 @@
     "recall_at_5": 0.9596,
     "recall_at_10": 0.9787,
     "query_latency_ms": {
-      "p50": 9.77,
-      "p90": 11.21,
-      "p95": 12.29,
-      "p99": 15.87
+      "p50": 10.04,
+      "p90": 11.85,
+      "p95": 12.95,
+      "p99": 20.21
     },
-    "process_rss_mb": 2922.05,
-    "ingest_seconds": 188.9,
+    "process_rss_mb": 2661.36,
+    "ingest_seconds": 204.5,
     "cost_usd": 0.0
   },
   "artifacts": {

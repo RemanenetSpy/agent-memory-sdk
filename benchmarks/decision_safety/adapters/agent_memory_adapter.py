@@ -46,7 +46,7 @@ class AgentMemoryAdapter(DecisionSafetyAdapter):
         "delete_by_id": "supported",          # Memory.forget(memory_id)
         "delete_scope": "partial",            # forget_where() filters on tier/tags/metadata, not on a tenant identity
         "tombstones": "partial",              # archive()/MemoryState.DELETED exist; forget() is a hard delete
-        "raw_message_store": "none",          # no transcript store; verbatim turns are ordinary memories
+        "raw_message_store": "none",          # no separate transcript table; turns become ordinary memories
         "ttl": "supported",                   # expires_at, enforced on the read path
         "explicit_supersession": "unsupported",  # recency/confidence/consolidate() only
         "as_of_query": "unsupported",         # created_at is stored, but there is no point-in-time read path

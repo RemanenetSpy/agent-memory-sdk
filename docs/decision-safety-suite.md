@@ -210,7 +210,7 @@ Published first so the suite is not graded on a curve it wrote for itself.
 | `delete_by_id` | `supported` | `Memory.forget(memory_id)` hard-deletes from the store |
 | `delete_scope` | `partial` | `Memory.forget_where()` bulk-deletes by tier, tags, metadata, or predicate — but a tier is not a tenant, so scope-wide deletion depends on how the caller namespaces |
 | `tombstones` | `partial` | `MemoryState.DELETED` / `archive()` exist; `forget()` is a hard delete with no tombstone |
-| `raw_message_store` | `none` | `from_conversation()` extracts without persisting the turn; the paged buffer is in-process only |
+| `raw_message_store` | `none` | No separate transcript table. `from_conversation()` turns the turn into ordinary memories (often storing it near-verbatim), and `PagedMemory` writes its buffer into the same store on page-out or `flush_to_recall()`. Everything a delete can reach, a delete does reach — there is no side table to re-extract from |
 | `ttl` | `supported` | `expires_at`, enforced on the read path; `cleanup()` reconciles stored state |
 | `explicit_supersession` | `unsupported` | Recency, confidence, and `consolidate()` only; no supersede edge |
 | `as_of_query` | `unsupported` | `created_at` is stored but there is no point-in-time read path |
