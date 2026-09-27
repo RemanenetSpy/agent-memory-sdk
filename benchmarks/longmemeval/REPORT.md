@@ -119,6 +119,25 @@ bounded when enabled with `--embedding-cache-size`. Its retained float32 vector
 payload is reported separately in result JSON. This prevents cache retention
 from being mistaken for the SDK's normal persistent-store memory use.
 
+### Re-verified after the retrieval-path changes
+
+The retriever gained two things while the Decision Safety Suite was being built:
+an expiry check on query-cache hits, and an optional `where` predicate (with a
+deeper-pool escalation) used by tenant-scoped views. Both are inert here — these
+haystacks set no TTL, and the benchmark passes no predicate — but "should be
+inert" is not a measurement, so the full 500-question lexical run was repeated
+against the published artifact:
+
+| | Published | Re-run |
+|---|---|---|
+| All 45 accuracy metrics (overall + per type) | — | **identical** |
+| Query p50 / mean | 10.09ms / 9.94ms | 10.04ms / 9.97ms |
+| Ingest | 124,362 entries in 211.6s | 124,362 entries in 204.5s |
+
+Every recall, coverage, abstention, and false-abstention figure matched exactly.
+Latency and ingest time differ by run-to-run machine variance only; the entry
+count is identical. Accuracy numbers in this report therefore stand unchanged.
+
 ## Results
 
 ![LongMemEval_S retrieval by question type](../../docs/assets/longmemeval_recall.png)
