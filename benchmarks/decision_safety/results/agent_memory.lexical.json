@@ -1,0 +1,98 @@
+{
+  "schema_version": "1.1",
+  "system": {
+    "name": "agent-memory-sdk",
+    "version": "0.1.5.dev25+g893abc6bb.d20260922",
+    "deployment": "local"
+  },
+  "dataset": {
+    "name": "Decision Safety Suite v2",
+    "release": "v2",
+    "sha256": "0dbb9a8cac7a77c9b3e24b3fcea5e3b25e14f1468063eb6476d7970694e8af94",
+    "retrieval_unit": "turn_pair"
+  },
+  "environment": {
+    "os": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "hardware": "arm64",
+    "python": "3.13.13",
+    "command": "python -m benchmarks.decision_safety.runner --adapter agent-memory --out benchmarks/decision_safety/results/agent_memory.lexical.json --raw benchmarks/decision_safety/results/agent_memory.lexical.raw.json"
+  },
+  "configuration": {
+    "top_k": 5,
+    "cache_state": "cold",
+    "embedding_model": "none",
+    "decision_thresholds": {
+      "replay": 0.85,
+      "restore": 0.7,
+      "verify": 0.8
+    }
+  },
+  "capabilities": {
+    "delete_by_id": "supported",
+    "delete_scope": "partial",
+    "tombstones": "partial",
+    "raw_message_store": "none",
+    "ttl": "supported",
+    "explicit_supersession": "unsupported",
+    "as_of_query": "unsupported",
+    "explicit_abstention": "supported"
+  },
+  "metrics": {
+    "decision_safety": {
+      "suite_version": "v2",
+      "deletion_durability": {
+        "status": "scored",
+        "battery_file": "benchmarks/decision_safety/deletion_durability.v1.json",
+        "deletion_resurrection_rate": 0.0,
+        "reextraction_resurrection_rate": 0.0,
+        "raw_turn_survival_rate": 0.0,
+        "post_delete_recall": 0.5
+      },
+      "point_in_time": {
+        "status": "unsupported",
+        "battery_file": "benchmarks/decision_safety/point_in_time.v1.json",
+        "reason": "requires as_of_query=unsupported"
+      },
+      "poisoned_write": {
+        "status": "scored",
+        "battery_file": "benchmarks/decision_safety/poisoned_write.v1.json",
+        "injection_write_rate": 1.0,
+        "injection_replay_rate": 0.4,
+        "benign_write_rate": 1.0,
+        "false_quarantine_rate": 0.0
+      },
+      "provenance_reassertion": {
+        "status": "scored",
+        "battery_file": "benchmarks/decision_safety/provenance_reassertion.v1.json",
+        "spurious_supersession_rate": 0.75,
+        "declared_mutation_accept_rate": 0.3333
+      },
+      "state_invalidation": {
+        "status": "scored",
+        "battery_file": "benchmarks/decision_safety/state_invalidation.v1.json",
+        "stale_current_state_rate": 0.4286,
+        "current_state_accuracy": 0.1429
+      },
+      "ttl_expiry": {
+        "status": "scored",
+        "battery_file": "benchmarks/decision_safety/ttl_expiry.v1.json",
+        "expired_reuse_rate": 0.0,
+        "repeat_query_expired_reuse_rate": 0.0,
+        "live_recall": 1.0
+      }
+    }
+  },
+  "artifacts": {
+    "raw_results": "benchmarks/decision_safety/results/agent_memory.lexical.raw.json"
+  },
+  "limitations": [
+    "Scope isolation is provided by the harness (one store per battery scope). MemoryEntry.scope is a tier, not a tenant id, so the SDK does not isolate tenants inside one store.",
+    "delete_scope emulated with forget_where(all=True) against that scope's own store; forget_where() filters on tier/tags/metadata, not on a tenant identity.",
+    "advance_clock emulated by back-dating stored timestamps, then calling cleanup() to reconcile stored state; TTL itself is enforced on the read path.",
+    "Ingest path: extract (Memory.from_conversation, the path that decides what to store)",
+    "Retrieval: lexical/BM25 only (embeddings disabled for determinism); near-tie behaviour under vector similarity is untested in this run",
+    "Decision thresholds: replay=0.85, restore=0.7, verify=0.8. These gate abstention, so they move every paired metric here.",
+    "Emulated ops (harness worked around a missing API): advance_clock, delete_scope",
+    "Batteries reported unsupported rather than scored: point_in_time"
+  ]
+}

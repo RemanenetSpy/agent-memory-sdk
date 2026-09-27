@@ -1,0 +1,39 @@
+{
+  "name": "state_invalidation",
+  "version": 1,
+  "description": "An attribute mutates A -> B (and in two cases A -> B -> C). A query for the current state must return the live value and must not return the superseded one. Cases are written so that A and B are near-identical against the query, which is where cosine-similarity-only stores let a stale fact compete with the active truth. Paired with current_state_accuracy, because returning nothing also avoids returning A.",
+  "spec": "../../docs/decision-safety-suite.md",
+  "requires_capabilities": [],
+  "optional_capabilities": ["explicit_supersession"],
+  "ops": [
+    {"op": "write", "id": "a1", "scope": "user:dan", "human": "I work at Stripe as a backend engineer.", "assistant": "Noted, backend engineer at Stripe.", "expect_write": true},
+    {"op": "write", "id": "a2", "scope": "user:dan", "human": "Our staging database is PostgreSQL 14.", "assistant": "Recorded PostgreSQL 14 for staging.", "expect_write": true},
+    {"op": "write", "id": "a3", "scope": "user:dan", "human": "My phone number is 07700 900123.", "assistant": "Saved that number.", "expect_write": true},
+    {"op": "write", "id": "a4", "scope": "user:dan", "human": "The on-call rotation is weekly, handover on Monday.", "assistant": "Noted: weekly rotation, Monday handover.", "expect_write": true},
+
+    {"op": "advance_clock", "seconds": 604800},
+
+    {"op": "write", "id": "b1", "scope": "user:dan", "human": "I left Stripe, I'm at Datadog now, still backend.", "assistant": "Updated: backend engineer at Datadog.", "expect_write": true, "mutates": "a1"},
+    {"op": "query", "id": "q1", "scope": "user:dan", "text": "Where do I work?", "assert": {"expect_state": "Datadog", "forbidden_state": "Stripe", "must_contain": ["Datadog"], "must_not_contain": ["Stripe"]}},
+    {"op": "query", "id": "q2", "scope": "user:dan", "text": "Who is my current employer?", "assert": {"expect_state": "Datadog", "forbidden_state": "Stripe", "must_contain": ["Datadog"], "must_not_contain": ["Stripe"], "notes": "Paraphrase of q1: A and B have near-identical query similarity here."}},
+
+    {"op": "write", "id": "b2", "scope": "user:dan", "human": "Staging was upgraded to PostgreSQL 16 last night.", "assistant": "Updated staging to PostgreSQL 16.", "expect_write": true, "mutates": "a2"},
+    {"op": "query", "id": "q3", "scope": "user:dan", "text": "What PostgreSQL version does staging run?", "assert": {"expect_state": "16", "forbidden_state": "14", "must_contain": ["16"], "must_not_contain": ["14"]}},
+
+    {"op": "write", "id": "b3", "scope": "user:dan", "human": "New number: 07700 900456. The old one is dead.", "assistant": "Updated your number to 07700 900456.", "expect_write": true, "mutates": "a3"},
+    {"op": "query", "id": "q4", "scope": "user:dan", "text": "What is my phone number?", "assert": {"expect_state": "900456", "forbidden_state": "900123", "must_contain": ["900456"], "must_not_contain": ["900123"]}},
+
+    {"op": "write", "id": "b4", "scope": "user:dan", "human": "On-call moved to a fortnightly rotation, handover on Wednesday.", "assistant": "Noted: fortnightly, Wednesday handover.", "expect_write": true, "mutates": "a4"},
+    {"op": "query", "id": "q5", "scope": "user:dan", "text": "How often does on-call rotate and when is handover?", "assert": {"expect_state": "fortnightly", "forbidden_state": "weekly", "must_contain": ["fortnightly", "Wednesday"], "must_not_contain": ["weekly", "Monday"], "notes": "Two attributes mutate in one turn; partial application is a failure."}},
+
+    {"op": "advance_clock", "seconds": 2592000},
+
+    {"op": "write", "id": "c1", "scope": "user:dan", "human": "Actually I've moved teams — I'm at Datadog on the infrastructure team, not backend.", "assistant": "Updated: Datadog, infrastructure team.", "expect_write": true, "mutates": "b1"},
+    {"op": "query", "id": "q6", "scope": "user:dan", "text": "What team am I on?", "assert": {"expect_state": "infrastructure", "forbidden_state": "backend", "must_contain": ["infrastructure"], "must_not_contain": ["backend"], "notes": "Third state in the chain: A -> B -> C. Both earlier states must lose."}},
+    {"op": "query", "id": "q7", "scope": "user:dan", "text": "Where do I work?", "assert": {"expect_state": "Datadog", "forbidden_state": "Stripe", "must_contain": ["Datadog"], "must_not_contain": ["Stripe"], "notes": "The employer mutation must survive a later unrelated mutation on the same entity."}},
+
+    {"op": "write", "id": "n1", "scope": "user:dan", "human": "I also mentor two interns.", "assistant": "Noted.", "expect_write": true},
+    {"op": "query", "id": "q8", "scope": "user:dan", "text": "Do I mentor anyone?", "assert": {"must_contain": ["interns"], "notes": "Paired control: a never-mutated fact must remain retrievable after the mutation block."}},
+    {"op": "query", "id": "q9", "scope": "user:dan", "text": "Which database does production run?", "assert": {"expect_abstain": true, "must_not_contain": ["14", "16"], "notes": "Paired control: mutation handling must not turn into answering an unasked-about scope."}}
+  ]
+}

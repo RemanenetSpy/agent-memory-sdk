@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 
 from agent_memory.exceptions import DecisionError
 from agent_memory.explain import enrich_decision
 from agent_memory.logging_config import get_logger
-from agent_memory.models import MemoryAction, MemoryDecision, MemoryScope, RetrievalResult
+from agent_memory.models import (
+    MemoryAction,
+    MemoryDecision,
+    MemoryEntry,
+    MemoryScope,
+    RetrievalResult,
+)
 from agent_memory.policy import DecisionPolicy, DefaultPolicy
 from agent_memory.retriever import MemoryRetriever
 
@@ -39,10 +46,11 @@ class DecisionEngine:
         top_k: int = 3,
         scopes: list[MemoryScope] | None = None,
         enable_verify: bool = True,
+        where: Callable[[MemoryEntry], bool] | None = None,
     ) -> MemoryDecision:
         t0 = time.perf_counter()
         try:
-            results = self._retriever.retrieve(query, top_k=top_k, scopes=scopes)
+            results = self._retriever.retrieve(query, top_k=top_k, scopes=scopes, where=where)
         except Exception as exc:
             raise DecisionError(f"Retrieval failed during decide: {exc}") from exc
 

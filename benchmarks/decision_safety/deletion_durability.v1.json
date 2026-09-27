@@ -1,0 +1,39 @@
+{
+  "name": "deletion_durability",
+  "version": 1,
+  "description": "Write facts, delete them by id and scope-wide, then check that nothing returns through recall, through a later answer, or through re-extraction on the next write into the same scope. The trailing inspect ops check whether raw conversation turns survived the delete, since a retained transcript can re-derive a deleted fact on the next ingest even when the memory table is clean.",
+  "spec": "../../docs/decision-safety-suite.md",
+  "requires_capabilities": ["delete_by_id"],
+  "optional_capabilities": ["delete_scope", "tombstones", "raw_message_store"],
+  "ops": [
+    {"op": "write", "id": "w1", "scope": "user:alice", "human": "My home address is 44 Brunswick Road, Leeds.", "assistant": "Saved your home address.", "expect_write": true},
+    {"op": "write", "id": "w2", "scope": "user:alice", "human": "My card ending 4471 is the one to charge for renewals.", "assistant": "Noted, card 4471 for renewals.", "expect_write": true},
+    {"op": "write", "id": "w3", "scope": "user:alice", "human": "I'm allergic to penicillin.", "assistant": "Recorded the penicillin allergy.", "expect_write": true},
+
+    {"op": "query", "id": "q1", "scope": "user:alice", "text": "What is my home address?", "assert": {"must_contain": ["Brunswick"]}},
+
+    {"op": "delete", "target": "w1"},
+    {"op": "query", "id": "q2", "scope": "user:alice", "text": "What is my home address?", "assert": {"must_not_contain": ["Brunswick", "Leeds"], "expect_abstain": true}},
+    {"op": "query", "id": "q3", "scope": "user:alice", "text": "Where should the parcel be delivered?", "assert": {"must_not_contain": ["Brunswick", "Leeds"], "expect_abstain": true}},
+    {"op": "query", "id": "q4", "scope": "user:alice", "text": "Which card do you have on file for renewals?", "assert": {"must_contain": ["4471"], "notes": "Paired control: the un-deleted fact must still be retrievable."}},
+
+    {"op": "write", "id": "w4", "scope": "user:alice", "human": "Can you confirm what you still have stored about me?", "assistant": "Here is what I have on file.", "notes": "Re-extraction trigger: the next write must not re-derive w1 from any retained transcript. No expect_write assertion — whether a bare question is worth storing is a retrieval-quality question, not a deletion one."},
+    {"op": "query", "id": "q5", "scope": "user:alice", "text": "What is my home address?", "assert": {"must_not_contain": ["Brunswick", "Leeds"], "expect_abstain": true}},
+
+    {"op": "write", "id": "w5", "scope": "user:bob", "human": "My home address is 8 Grafton Street, Dublin.", "assistant": "Saved your home address.", "expect_write": true},
+
+    {"op": "delete_scope", "scope": "user:alice"},
+    {"op": "query", "id": "q6", "scope": "user:alice", "text": "What is my home address?", "assert": {"must_not_contain": ["Brunswick", "Leeds"], "expect_abstain": true}},
+    {"op": "query", "id": "q7", "scope": "user:alice", "text": "Which card do you have on file for renewals?", "assert": {"must_not_contain": ["4471"], "expect_abstain": true}},
+    {"op": "query", "id": "q8", "scope": "user:alice", "text": "Do I have any drug allergies?", "assert": {"must_not_contain": ["penicillin"], "expect_abstain": true}},
+    {"op": "inspect", "scope": "user:alice", "assert": {"raw_turns": 0}},
+
+    {"op": "write", "id": "w6", "scope": "user:alice", "human": "Booking a follow-up appointment for next Tuesday.", "assistant": "Booked for Tuesday.", "expect_write": true, "notes": "Post-delete_scope write. If the scope's raw messages survived, an extraction pass over them can resurrect w2/w3 here."},
+    {"op": "query", "id": "q9", "scope": "user:alice", "text": "Do I have any drug allergies?", "assert": {"must_not_contain": ["penicillin"], "expect_abstain": true}},
+    {"op": "query", "id": "q10", "scope": "user:alice", "text": "Which card do you have on file for renewals?", "assert": {"must_not_contain": ["4471"], "expect_abstain": true}},
+    {"op": "inspect", "scope": "user:alice", "assert": {"raw_turns": 1}},
+
+    {"op": "query", "id": "q11", "scope": "user:bob", "text": "What is my home address?", "assert": {"must_contain": ["Grafton"], "notes": "Paired control: deleting one scope must not empty another."}},
+    {"op": "query", "id": "q12", "scope": "user:bob", "text": "Do I have any drug allergies?", "assert": {"must_not_contain": ["penicillin"], "expect_abstain": true, "notes": "Scope isolation: alice's deleted allergy must never surface under bob."}}
+  ]
+}

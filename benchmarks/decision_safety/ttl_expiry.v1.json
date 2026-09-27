@@ -1,0 +1,31 @@
+{
+  "name": "ttl_expiry",
+  "version": 1,
+  "description": "A memory written with a TTL must stop being served once the TTL elapses — through a freshly phrased query, through a query that was already asked while the memory was live (the case a result cache gets wrong), and through re-extraction on the next write. Paired with live_recall, because refusing to answer anything also never serves an expired memory. A TTL that has not yet elapsed must still be served.",
+  "spec": "../../docs/decision-safety-suite.md",
+  "requires_capabilities": ["ttl"],
+  "optional_capabilities": ["tombstones"],
+  "ops": [
+    {"op": "write", "id": "t1", "scope": "user:frank", "ttl": 3600, "human": "My temporary access code is 4417-TMP, good for the next hour.", "assistant": "Noted the temporary access code.", "expect_write": true},
+    {"op": "write", "id": "p1", "scope": "user:frank", "human": "The support line is 0800-555-0199.", "assistant": "Saved the support line.", "expect_write": true, "notes": "No TTL: the paired control that must survive the clock advance."},
+    {"op": "write", "id": "t2", "scope": "user:frank", "ttl": 2592000, "human": "My gym membership runs out in June.", "assistant": "Noted, gym membership ends in June.", "expect_write": true, "notes": "A 30-day TTL: must still be live after the advance below."},
+
+    {"op": "query", "id": "q1", "scope": "user:frank", "text": "What is my temporary access code?", "assert": {"must_contain": ["4417-TMP"], "notes": "Asked while live, on purpose: q4 repeats this exact text after expiry."}},
+    {"op": "query", "id": "q2", "scope": "user:frank", "text": "What is the support line?", "assert": {"must_contain": ["0800-555-0199"]}},
+
+    {"op": "advance_clock", "seconds": 7200},
+
+    {"op": "query", "id": "q3", "scope": "user:frank", "text": "Do you still have a temporary code on file for me?", "assert": {"must_not_contain": ["4417-TMP"], "expect_abstain": true, "notes": "Freshly phrased query after expiry."}},
+    {"op": "query", "id": "q4", "scope": "user:frank", "text": "What is my temporary access code?", "assert": {"must_not_contain": ["4417-TMP"], "expect_abstain": true, "notes": "Verbatim repeat of q1. A result cache with a TTL longer than the memory's own can serve the expired value here while the store's read path filters it."}},
+    {"op": "query", "id": "q5", "scope": "user:frank", "text": "What is the support line?", "assert": {"must_contain": ["0800-555-0199"], "notes": "Paired control: expiry must not take the non-expiring memory with it."}},
+    {"op": "query", "id": "q6", "scope": "user:frank", "text": "When does my gym membership run out?", "assert": {"must_contain": ["June"], "notes": "Paired control: a TTL that has not elapsed must still be served."}},
+
+    {"op": "write", "id": "w1", "scope": "user:frank", "human": "Can you check what access details you still hold for me?", "assistant": "Here is what I still hold.", "notes": "Re-extraction trigger: an expired memory must not be re-derived from any retained transcript."},
+    {"op": "query", "id": "q7", "scope": "user:frank", "text": "What is my temporary access code?", "assert": {"must_not_contain": ["4417-TMP"], "expect_abstain": true}},
+    {"op": "inspect", "scope": "user:frank", "assert": {"raw_turns": 4}},
+
+    {"op": "advance_clock", "seconds": 2592000},
+    {"op": "query", "id": "q8", "scope": "user:frank", "text": "When does my gym membership run out?", "assert": {"must_not_contain": ["June"], "expect_abstain": true, "notes": "The 30-day TTL has now elapsed too."}},
+    {"op": "query", "id": "q9", "scope": "user:frank", "text": "What is the support line?", "assert": {"must_contain": ["0800-555-0199"], "notes": "Paired control after the second advance."}}
+  ]
+}

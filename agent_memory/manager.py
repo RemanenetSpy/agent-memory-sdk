@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+from collections.abc import Callable
 from pathlib import Path
 
 from agent_memory.confidence import ConfidenceEvent, ConfidenceLearner
@@ -12,6 +13,7 @@ from agent_memory.logging_config import get_logger
 from agent_memory.models import MemoryAction, MemoryDecision, MemoryEntry, MemoryScope, MemoryType
 from agent_memory.policy import DecisionPolicy, DefaultPolicy
 from agent_memory.retriever import MemoryRetriever
+from agent_memory.scoped import MemoryView
 from agent_memory.sqlite_store import SqliteMemoryStore
 from agent_memory.store import ChromaDBStore, MemoryStore
 from agent_memory.ttl import parse_ttl
@@ -160,7 +162,15 @@ class Memory:
         top_k: int = 3,
         scope: list[MemoryScope | str] | None = None,
         enable_verify: bool = True,
+        where: Callable[[MemoryEntry], bool] | None = None,
     ) -> MemoryDecision:
+        """Decide what to do with memory for *query*.
+
+        *where* restricts which stored memories may be considered, applied
+        before scoring. Callers that can only see part of the store — one tenant,
+        one agent, one session — must pass it, because ``scope`` is a tier
+        (``user``/``project``/...), not a tenant identifier.
+        """
         scopes = None
         if scope:
             scopes = [MemoryScope(s) if isinstance(s, str) else s for s in scope]
@@ -170,6 +180,7 @@ class Memory:
             top_k=top_k,
             scopes=scopes,
             enable_verify=enable_verify,
+            where=where,
         )
 
     async def aresolve(
@@ -246,6 +257,101 @@ class Memory:
     async def aforget(self, memory_id: str) -> bool:
         """Async version of forget()."""
         return await asyncio.to_thread(self.forget, memory_id)
+
+    def forget_where(
+        self,
+        *,
+        scope: builtins.list[MemoryScope | str] | None = None,
+        type: MemoryType | str | None = None,
+        tags: builtins.list[str] | None = None,
+        metadata: dict | None = None,
+        where: Callable[[MemoryEntry], bool] | None = None,
+        all: bool = False,
+        limit: int = 100_000,
+    ) -> int:
+        """Bulk-delete every memory matching *all* of the given criteria.
+
+        Returns the number of memories deleted. Archived and expired memories
+        are included: "forget this" must not leave a copy behind in another
+        state.
+
+        *tags* matches entries carrying every listed tag; *metadata* matches
+        entries whose metadata contains every given key/value pair. Pass
+        ``all=True`` to delete everything in the store — required explicitly,
+        so an empty filter cannot wipe a store by accident.
+
+        Usage::
+
+            memory.forget_where(metadata={"user_id": "alice"})
+            memory.forget_where(scope=["session"])
+            memory.forget_where(all=True)
+        """
+        criteria = (scope, type, tags, metadata, where)
+        if not any(value is not None for value in criteria) and not all:
+            raise ValueError(
+                "forget_where() needs at least one of scope/type/tags/metadata/where, "
+                "or all=True to delete every memory in the store."
+            )
+
+        scopes = [MemoryScope(s) if isinstance(s, str) else s for s in scope] if scope else None
+        memory_type = MemoryType(type) if isinstance(type, str) else type
+
+        entries = self.store.list_all(
+            limit=limit,
+            scopes=scopes,
+            include_archived=True,
+            include_expired=True,
+            memory_type=memory_type,
+        )
+
+        deleted = 0
+        for entry in entries:
+            if tags and not set(tags).issubset(entry.tags):
+                continue
+            if metadata and any(entry.metadata.get(k) != v for k, v in metadata.items()):
+                continue
+            if where is not None and not where(entry):
+                continue
+            deleted += int(self.store.delete(entry.id))
+
+        if deleted:
+            self.retriever.invalidate_cache()
+        log.debug("forget_where  deleted=%d  of=%d", deleted, len(entries))
+        return deleted
+
+    async def aforget_where(self, **kwargs: object) -> int:
+        """Async version of forget_where()."""
+        return await asyncio.to_thread(lambda: self.forget_where(**kwargs))  # type: ignore[arg-type]
+
+    def scoped(
+        self,
+        *,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        shared: bool = False,
+        include_unscoped: bool = False,
+    ) -> MemoryView:
+        """Return a per-user or per-session view over this store.
+
+        ``scope`` is a tier (``user``/``project``/...), not a tenant id, so many
+        users in one store need this instead. Reads are hierarchical (session →
+        user → shared) and filtered during retrieval; writes stay in the view's
+        own namespace. See :class:`~agent_memory.scoped.MemoryView`.
+
+        Usage::
+
+            alice = memory.scoped(user_id="alice")
+            alice.session("s3").remember("Which seat?", "Window")
+            alice.resolve("seat preference?")
+            memory.scoped(shared=True).remember("Refund window?", "30 days")
+        """
+        return MemoryView(
+            memory=self,
+            user_id=user_id,
+            session_id=session_id,
+            shared=shared,
+            include_unscoped=include_unscoped,
+        )
 
     def archive(self, memory_id: str) -> MemoryEntry | None:
         entry = self.store.get(memory_id)
@@ -380,12 +486,17 @@ class Memory:
         scope: MemoryScope | str = MemoryScope.USER,
         min_confidence: float = 0.75,
         extractor: EntityExtractor | None = None,
+        metadata: dict | None = None,
     ) -> builtins.list[MemoryEntry]:
         """Extract and store memories from a single conversation turn.
 
         Automatically identifies facts, preferences, and entities in
         *human* + *assistant* text and calls :meth:`remember` for each.
         Only candidates above *min_confidence* are stored.
+
+        *metadata* is merged into every stored candidate, which is how a
+        :class:`~agent_memory.scoped.MemoryView` stamps tenant identity onto
+        extracted memories.
 
         Returns the list of newly stored :class:`~agent_memory.models.MemoryEntry` objects.
 
@@ -414,7 +525,7 @@ class Memory:
                 tags=c.tags,
                 confidence=c.confidence,
                 requires_verification=c.requires_verification,
-                metadata=c.metadata,
+                metadata={**(c.metadata or {}), **(metadata or {})},
             )
             stored.append(entry)
         return stored
@@ -427,6 +538,7 @@ class Memory:
         scope: MemoryScope | str = MemoryScope.USER,
         min_confidence: float = 0.75,
         extractor: EntityExtractor | None = None,
+        metadata: dict | None = None,
     ) -> builtins.list[MemoryEntry]:
         """Async version of :meth:`from_conversation`."""
         return await asyncio.to_thread(
@@ -436,6 +548,7 @@ class Memory:
             scope=scope,
             min_confidence=min_confidence,
             extractor=extractor,
+            metadata=metadata,
         )
 
     # ------------------------------------------------------------------

@@ -29,7 +29,7 @@ other project.
 |---|---|---|
 | Retrieval | Recall@5/10, evidence coverage@5/10, MRR | Same dataset release, index unit, top-k, and corpus per system |
 | End-to-end QA | Official benchmark accuracy, answer latency, total cost | Same reader model, prompt, temperature, context budget, and judge |
-| Decision safety | Wrong replay, stale reuse, false abstention, verification rate | Public repeated-query, contradiction, TTL, and update cases |
+| Decision safety | Wrong replay, stale reuse, false abstention, verification rate, plus the v2 batteries below | Public repeated-query, contradiction, TTL, update, deletion, injection, and supersession cases |
 | Local resources | Ingest time, query p50/p90/p95/p99, CPU, RSS | Same machine, OS, corpus, persistence mode, and warm/cold declaration |
 
 ## Dataset plan
@@ -40,6 +40,7 @@ other project.
 | LongMemEval cleaned release | Retrieval and end-to-end QA | Report separately from the original release; never combine baseline rankings. |
 | LoCoMo | End-to-end QA | Use the official evaluator and identical reader-model budget. |
 | Agent Memory Decision Suite | Decision safety | Versioned public cases for repeats, paraphrases, TTL expiry, contradictory updates, and abstention. |
+| Decision Safety Suite v2 | Decision safety | Ordered write/delete/query scripts for deletion durability, poisoned writes, state invalidation, provenance re-assertion, and point-in-time queries. See [`docs/decision-safety-suite.md`](decision-safety-suite.md). |
 | Persistent-store stress suite | Local resources | Fixed corpus sizes, no LRU cache unless the cache track is explicitly selected. |
 
 Synthetic scaling data is a supplement, not a headline-quality claim.
@@ -81,10 +82,20 @@ Report a median and spread, not only the best run.
 | Matched retrieval run | "Higher retrieval recall than these named configurations." |
 | Matched end-to-end run | "Higher benchmark QA accuracy than these named configurations." |
 | Matched decision suite | "Lower wrong-replay rate than these named configurations." |
+| Matched decision suite, safety metric without its pair | Not publishable. |
 | Unmatched release, index unit, deployment, or reader model | "Not directly comparable." |
 
 No result supports "best memory tool" without a published aggregate metric and
 predeclared weighting. Capability differences should remain visible instead.
+
+Every decision-safety metric that rewards blocking, abstaining, or ignoring is
+published next to the metric that punishes overdoing it, on the same workload
+and in the same table. Quarantining every write must be visibly costly, not a
+way to win a safety column.
+
+A failure that is an acknowledged open bug in the system under test is reported
+as a version-pinned observation with a link to the upstream issue, re-run after
+a fix ships, and never used as a headline comparative claim.
 
 ## Maintainer review request
 

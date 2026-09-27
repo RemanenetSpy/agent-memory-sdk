@@ -4,7 +4,7 @@
   "type": "object",
   "required": ["schema_version", "system", "dataset", "environment", "configuration", "metrics", "artifacts"],
   "properties": {
-    "schema_version": {"const": "1.0"},
+    "schema_version": {"enum": ["1.0", "1.1"]},
     "system": {
       "type": "object",
       "required": ["name", "version", "deployment"],
@@ -58,7 +58,22 @@
         "query_latency_ms": {"type": "object"},
         "process_rss_mb": {"type": "number", "minimum": 0},
         "ingest_seconds": {"type": "number", "minimum": 0},
-        "cost_usd": {"type": "number", "minimum": 0}
+        "cost_usd": {"type": "number", "minimum": 0},
+        "decision_safety": {"$ref": "#/$defs/decision_safety"}
+      }
+    },
+    "capabilities": {
+      "description": "Declared per adapter. 'unsupported' is a reported result, never a zero score.",
+      "type": "object",
+      "properties": {
+        "delete_by_id": {"$ref": "#/$defs/support"},
+        "delete_scope": {"$ref": "#/$defs/support"},
+        "tombstones": {"$ref": "#/$defs/support"},
+        "raw_message_store": {"enum": ["retained", "retained_configurable", "none"]},
+        "ttl": {"$ref": "#/$defs/support"},
+        "explicit_supersession": {"$ref": "#/$defs/support"},
+        "as_of_query": {"$ref": "#/$defs/support"},
+        "explicit_abstention": {"$ref": "#/$defs/support"}
       }
     },
     "artifacts": {
@@ -70,5 +85,103 @@
       }
     },
     "limitations": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "support": {"enum": ["supported", "partial", "unsupported"]},
+    "rate": {"type": "number", "minimum": 0, "maximum": 1},
+    "battery_status": {"enum": ["scored", "unsupported", "not_tested"]},
+    "decision_safety": {
+      "description": "Decision Safety Suite v2 (docs/decision-safety-suite.md). Each battery is either scored with every metric in its group, or reported unsupported/not_tested with no metrics. Safety metrics are never published without their paired permissiveness metric.",
+      "type": "object",
+      "properties": {
+        "suite_version": {"type": "string"},
+        "deletion_durability": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {"$ref": "#/$defs/battery_status"},
+            "battery_file": {"type": "string"},
+            "deletion_resurrection_rate": {"$ref": "#/$defs/rate"},
+            "raw_turn_survival_rate": {"$ref": "#/$defs/rate"},
+            "reextraction_resurrection_rate": {"$ref": "#/$defs/rate"},
+            "post_delete_recall": {"$ref": "#/$defs/rate"}
+          },
+          "dependentRequired": {
+            "deletion_resurrection_rate": ["post_delete_recall"]
+          }
+        },
+        "ttl_expiry": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {"$ref": "#/$defs/battery_status"},
+            "battery_file": {"type": "string"},
+            "expired_reuse_rate": {"$ref": "#/$defs/rate"},
+            "repeat_query_expired_reuse_rate": {"$ref": "#/$defs/rate"},
+            "live_recall": {"$ref": "#/$defs/rate"}
+          },
+          "dependentRequired": {
+            "expired_reuse_rate": ["live_recall"],
+            "repeat_query_expired_reuse_rate": ["live_recall"]
+          }
+        },
+        "poisoned_write": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {"$ref": "#/$defs/battery_status"},
+            "battery_file": {"type": "string"},
+            "injection_write_rate": {"$ref": "#/$defs/rate"},
+            "injection_replay_rate": {"$ref": "#/$defs/rate"},
+            "benign_write_rate": {"$ref": "#/$defs/rate"},
+            "false_quarantine_rate": {"$ref": "#/$defs/rate"}
+          },
+          "dependentRequired": {
+            "injection_write_rate": ["benign_write_rate", "false_quarantine_rate"]
+          }
+        },
+        "state_invalidation": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {"$ref": "#/$defs/battery_status"},
+            "battery_file": {"type": "string"},
+            "stale_current_state_rate": {"$ref": "#/$defs/rate"},
+            "current_state_accuracy": {"$ref": "#/$defs/rate"},
+            "invalidation_lag_writes": {"type": ["number", "null"], "minimum": 0}
+          },
+          "dependentRequired": {
+            "stale_current_state_rate": ["current_state_accuracy"]
+          }
+        },
+        "provenance_reassertion": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {"$ref": "#/$defs/battery_status"},
+            "battery_file": {"type": "string"},
+            "spurious_supersession_rate": {"$ref": "#/$defs/rate"},
+            "declared_mutation_accept_rate": {"$ref": "#/$defs/rate"}
+          },
+          "dependentRequired": {
+            "spurious_supersession_rate": ["declared_mutation_accept_rate"]
+          }
+        },
+        "point_in_time": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {"$ref": "#/$defs/battery_status"},
+            "battery_file": {"type": "string"},
+            "as_of_state_accuracy": {"$ref": "#/$defs/rate"},
+            "as_of_future_leakage_rate": {"$ref": "#/$defs/rate"},
+            "as_of_determinism": {"$ref": "#/$defs/rate"}
+          },
+          "dependentRequired": {
+            "as_of_future_leakage_rate": ["as_of_state_accuracy"]
+          }
+        }
+      }
+    }
   }
 }

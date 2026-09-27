@@ -51,6 +51,7 @@ from agent_memory.multiagent import IsolationMode, MultiAgentMemory
 from agent_memory.paged_memory import PagedContext, PagedMemory
 from agent_memory.policy import DecisionPolicy, DefaultPolicy
 from agent_memory.retriever import FusionStrategy, LinearFusionStrategy, RRFFusionStrategy
+from agent_memory.scoped import MemoryView
 from agent_memory.sqlite_store import SqliteMemoryStore
 
 try:
@@ -112,6 +113,7 @@ __all__ = [
     "MemoryScope",
     "MemoryState",
     "MemoryType",
+    "MemoryView",
     "MultiAgentMemory",
     "RetrievalResult",
     "SqliteMemoryStore",
