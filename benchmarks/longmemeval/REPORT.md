@@ -86,6 +86,43 @@ uv run python run_retrieval.py --semantic      # 98.1% _S semantic run, ~1.7h
 uv run python run_retrieval.py                 # 96.0% _S lexical run, ~10 min
 ```
 
+### Windows (PowerShell)
+
+The same benchmark command works on Windows, macOS, and Linux. The runner
+detects the host OS for resource telemetry automatically; no platform flag is
+needed. For a native Windows setup, install Git and `uv` from an elevated
+PowerShell, then open a new terminal:
+
+```powershell
+winget install --id Git.Git -e
+winget install --id astral-sh.uv -e
+```
+
+Clone the repository, install Python and the project dependencies, then fetch
+the cleaned dataset:
+
+```powershell
+git clone https://github.com/TheProdSDE/agent-memory-sdk.git
+Set-Location agent-memory-sdk
+uv python install 3.12
+uv sync
+New-Item -ItemType Directory -Force benchmarks/longmemeval/data
+Invoke-WebRequest -Uri "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json" -OutFile "benchmarks/longmemeval/data/longmemeval_s_cleaned.json"
+```
+
+Run a smoke test, then the full lexical benchmark. Results and checkpoints are
+written under the Windows temporary directory so the checked-in artifacts are
+left untouched:
+
+```powershell
+uv run python benchmarks/longmemeval/run_retrieval.py --limit 1 --out "$env:TEMP/longmemeval-smoke.json"
+uv run python benchmarks/longmemeval/run_retrieval.py --out "$env:TEMP/longmemeval-s-lexical.json" --checkpoint "$env:TEMP/longmemeval-s-lexical.checkpoint.json"
+```
+
+For semantic retrieval, install the optional embedding dependencies with
+`uv sync --extra semantic`, then add `--semantic` to the full-run command. To
+resume an interrupted run, reuse its checkpoint path and add `--resume`.
+
 For an interruption-safe full semantic run, add a checkpoint and resume with
 the same command after an interruption:
 
@@ -111,8 +148,10 @@ Each full result file records the following values from the same run:
 
 The runner uses nearest-rank percentiles. On macOS, peak RSS is reported from
 `getrusage()` in bytes and normalized to MiB; on Linux it is normalized from
-KiB. Checkpoints write completed rows atomically every ten questions by default
-and do not change the query, index, or scoring configuration.
+KiB. On Windows, peak working set is read through `GetProcessMemoryInfo()` and
+normalized to MiB. CPU time uses `os.times()` on all platforms. Checkpoints
+write completed rows atomically every ten questions by default and do not
+change the query, index, or scoring configuration.
 
 The optional cross-haystack embedding cache is **disabled by default** and is
 bounded when enabled with `--embedding-cache-size`. Its retained float32 vector

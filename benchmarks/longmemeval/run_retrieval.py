@@ -41,7 +41,6 @@ import argparse
 import json
 import math
 import os
-import resource
 import statistics
 import sys
 import tempfile
@@ -78,8 +77,47 @@ def _percentile(samples: list[float], percentile: int) -> float | None:
     return sorted(samples)[rank - 1]
 
 
-def _peak_rss_mb(usage: resource.struct_rusage) -> float:
-    """Normalize ru_maxrss to MiB across macOS (bytes) and Linux (KiB)."""
+def _peak_rss_mb() -> float:
+    """Return peak process working-set size in MiB on supported platforms."""
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        class ProcessMemoryCounters(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+
+        counters = ProcessMemoryCounters()
+        counters.cb = ctypes.sizeof(counters)
+        kernel32 = ctypes.WinDLL("Kernel32.dll")
+        psapi = ctypes.WinDLL("Psapi.dll")
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(ProcessMemoryCounters),
+            wintypes.DWORD,
+        ]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+        success = psapi.GetProcessMemoryInfo(
+            kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
+        )
+        if not success:
+            raise ctypes.WinError()
+        return round(counters.PeakWorkingSetSize / (1024 * 1024), 2)
+
+    import resource
+
+    usage = resource.getrusage(resource.RUSAGE_SELF)
     bytes_per_rss_unit = 1 if sys.platform == "darwin" else 1024
     return round(usage.ru_maxrss * bytes_per_rss_unit / (1024 * 1024), 2)
 
@@ -372,7 +410,7 @@ def main() -> None:
         questions = iter(loaded[completed:])
 
     t_start = time.time()
-    resource_start = resource.getrusage(resource.RUSAGE_SELF)
+    cpu_start = os.times()
     for i, q in enumerate(questions, completed + 1):
         rows.append(run_question(q, semantic=args.semantic))
         del q
@@ -388,12 +426,12 @@ def main() -> None:
             )
 
     summary = summarise(rows)
-    resource_end = resource.getrusage(resource.RUSAGE_SELF)
+    cpu_end = os.times()
     summary["execution"] = {
         "run_wall_seconds": round(time.time() - t_start, 2),
-        "run_cpu_user_seconds": round(resource_end.ru_utime - resource_start.ru_utime, 2),
-        "run_cpu_system_seconds": round(resource_end.ru_stime - resource_start.ru_stime, 2),
-        "process_peak_rss_mb": _peak_rss_mb(resource_end),
+        "run_cpu_user_seconds": round(cpu_end.user - cpu_start.user, 2),
+        "run_cpu_system_seconds": round(cpu_end.system - cpu_start.system, 2),
+        "process_peak_rss_mb": _peak_rss_mb(),
         "resumed_from_questions": completed,
     }
     if args.semantic:
