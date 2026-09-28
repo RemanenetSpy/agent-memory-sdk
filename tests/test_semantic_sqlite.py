@@ -88,6 +88,28 @@ def test_persists_and_backfills_across_instances(tmp_path: Path) -> None:
     assert decision.action == MemoryAction.REPLAY
 
 
+def test_vector_backfill_uses_bounded_batches(tmp_path: Path) -> None:
+    from agent_memory.sqlite_store import _VECTOR_BACKFILL_BATCH_SIZE
+
+    persist = tmp_path / "batched-backfill"
+    lexical = Memory(persist_dir=persist, enable_embeddings=False)
+    for index in range(_VECTOR_BACKFILL_BATCH_SIZE + 1):
+        lexical.remember(f"query {index}", f"response {index}")
+    lexical.store.close()
+
+    batches: list[int] = []
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        batches.append(len(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    semantic = Memory(persist_dir=persist, enable_embeddings=True, embedder=embed)
+
+    assert semantic.store.semantic_search_enabled  # type: ignore[union-attr]
+    assert batches[0] == 1  # embedding_dimension() probe
+    assert batches[1:] == [_VECTOR_BACKFILL_BATCH_SIZE, 1]
+
+
 def test_scope_filtering_applies_after_knn(semantic_memory: Memory) -> None:
     semantic_memory.remember("team secret", "team data", scope="team")
     semantic_memory.remember("user note", "user data", scope="user")

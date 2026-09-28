@@ -122,10 +122,17 @@ print(result.format())
 
 ```bash
 pip install "agent-memory-sdk[api]"
+export AGENT_MEMORY_API_KEY="replace-with-a-long-random-secret"
 AGENT_MEMORY_DIR=.agent_memory agent-memory-api
 # → http://localhost:8000
 # → http://localhost:8000/docs  (Swagger UI)
 ```
+
+The REST API requires `AGENT_MEMORY_API_KEY` (or an `api_key` passed to
+`create_app`). Send it as `X-API-Key` or `Authorization: Bearer ...`. The server
+binds to `127.0.0.1` by default. Set `HOST` explicitly only when you intend to
+expose it; use TLS and a high-entropy secret for network deployments. For trusted
+local tests only, `create_app(allow_unauthenticated=True)` disables the check.
 
 Endpoints: `POST /memories` · `GET /memories` · `GET /memories/{id}` · `DELETE /memories/{id}` · `POST /memories/{id}/archive` · `POST /resolve` · `GET /stats` · `POST /cleanup` · `POST /consolidate`
 

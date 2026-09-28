@@ -17,6 +17,8 @@ from agent_memory.store import MemoryStore, _tokenize, bm25_scores, query_covera
 
 log = get_logger(__name__)
 
+_VECTOR_BACKFILL_BATCH_SIZE = 64
+
 
 class SqliteMemoryStore(MemoryStore):
     """SQLite-backed persistent memory storage.
@@ -334,13 +336,15 @@ class SqliteMemoryStore(MemoryStore):
             return
         import sqlite_vec
 
-        texts = [f"{q}\n{c}\n{t}" for _, q, c, t in rows]
-        vectors = self._embedder(texts)
-        for (rowid, *_), vector in zip(rows, vectors):
-            conn.execute(
-                "INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)",
-                (rowid, sqlite_vec.serialize_float32(vector)),
-            )
+        for start in range(0, len(rows), _VECTOR_BACKFILL_BATCH_SIZE):
+            batch = rows[start : start + _VECTOR_BACKFILL_BATCH_SIZE]
+            texts = [f"{query}\n{content}\n{tags}" for _, query, content, tags in batch]
+            vectors = self._embedder(texts)
+            for (rowid, *_), vector in zip(batch, vectors):
+                conn.execute(
+                    "INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)",
+                    (rowid, sqlite_vec.serialize_float32(vector)),
+                )
 
     @property
     def semantic_search_enabled(self) -> bool:

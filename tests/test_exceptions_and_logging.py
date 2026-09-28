@@ -319,6 +319,34 @@ def test_retriever_cache_invalidated_after_write(tmp_path):
     assert d2.action.value in ("replay", "restore", "verify", "none")
 
 
+def test_retriever_cache_invalidated_after_archive(tmp_path):
+    from agent_memory.manager import Memory
+
+    mem = Memory(persist_dir=tmp_path, collection_name="archive_inv_test")
+    entry = mem.remember("archive cache query", "response")
+    assert mem.resolve("archive cache query", mode="replay").action.value == "replay"
+
+    mem.archive(entry.id)
+
+    assert mem.resolve("archive cache query", mode="replay").action.value == "none"
+
+
+def test_retriever_cache_invalidated_after_cleanup(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from agent_memory.manager import Memory
+
+    mem = Memory(persist_dir=tmp_path, collection_name="cleanup_inv_test")
+    entry = mem.remember("cleanup cache query", "response", ttl="1h")
+    assert mem.resolve("cleanup cache query", mode="replay").action.value == "replay"
+
+    entry.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    mem.store.update(entry)
+    assert mem.cleanup()["expired"] == 1
+
+    assert mem.resolve("cleanup cache query", mode="replay").action.value == "none"
+
+
 def test_lru_cache_evicts_oldest_entries():
     from agent_memory.retriever import _LRUCache
 

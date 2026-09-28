@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/TheProdSDE/agent-memory-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/TheProdSDE/agent-memory-sdk/actions)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 [![PyPI version](https://img.shields.io/pypi/v/agent-memory-sdk.svg)](https://pypi.org/project/agent-memory-sdk/)
 [![MCP Registry](https://badge.mcpx.dev?type=server&name=io.github.theprodsde%2Fagent-memory)](https://registry.modelcontextprotocol.io/servers/io.github.theprodsde/agent-memory)
 
 **Persistent semantic memory for AI agents with intelligent decision-making.**
 
-![Agent Memory CLI demo: exact query replays, shared-word trap correctly returns none](docs/assets/demo.gif)
+![Agent Memory CLI demo: exact query REPLAYs, paraphrase RESTOREs as context, shared-word trap correctly returns NONE](docs/assets/demo.gif)
 
 > **🚀 Created by:** [TheProdSDE](https://github.com/TheProdSDE)
 
@@ -39,7 +39,120 @@ flowchart TD
 
 Every `resolve()` returns an **explicit action** with a scored, explainable rationale —
 not just a retrieved chunk.
-Adversarial eval: **25/25 (100%)** on trap queries — see [benchmarks](docs/benchmarks.md).
+Adversarial eval: **34/36 (94%)** on trap queries — the 2 misses return VERIFY (cautious), never a wrong REPLAY — see [benchmarks](docs/benchmarks.md).
+
+---
+
+## Context rot — what this solves (and what it can't)
+
+**Context rot** is the measured degradation of LLM accuracy as the context window fills —
+long before the token limit. Stale chunks, irrelevant retrievals, and unbounded conversation
+history don't just waste tokens; they actively degrade answers ("lost in the middle",
+instruction drift, distractor sensitivity).
+
+Context rot has two causes. Agent Memory addresses the first; nothing outside the model
+itself can address the second.
+
+**1. What goes into the context — controllable, and this SDK's job:**
+
+| Rot source | Mechanism in Agent Memory |
+|-----------|---------------------------|
+| Irrelevant memory injected into every prompt | Decision layer — **NONE** refuses to inject when nothing truly matches (34/36 on adversarial trap queries; the 2 misses fail safe to VERIFY) |
+| Unbounded in-session history | **`PagedMemory`** — fixed in-context buffer; old turns page out to recall storage and return per-query (MemGPT-style tiers) |
+| Instruction drift in long coding sessions | **RESTORE** re-injects the relevant convention fresh, near the end of context, exactly when a query needs it |
+| Stale facts silently reused | **VERIFY** + custom verifier callbacks + TTL expiry + half-life temporal decay |
+| Reminders that never adapt | `mark_correct()` / `mark_wrong()` — confidence learning promotes memories that keep helping, demotes corrected ones |
+| Knowledge lost when the session ends | `from_conversation()` distills durable facts from conversation turns into the store |
+
+**2. How the model attends over tokens already in its context — not controllable from outside.**
+Attention degradation over long context is a property of the model. No memory layer changes
+that. What Agent Memory does is keep the context small and relevant enough that the model
+rarely enters the degraded regime in the first place.
+
+**The honest claim:** Agent Memory prevents **context pollution** — the dominant
+controllable cause of context rot in agentic systems. It doesn't change model attention
+behavior, and it only helps if your agent routes context through `resolve()` /
+`PagedMemory` instead of concatenating history by hand.
+
+---
+
+## How it compares
+
+Today you need **three tools wired together** to get what `resolve()` does in one call:
+a semantic cache (GPTCache) for replay, a memory layer (Mem0 / Zep) for context, and
+custom staleness logic for verification. No existing tool decides — at read time —
+*whether and how* a memory should be used.
+
+Cells about other projects are capability checks against their own source or
+docs (mem0 checked on 2026-09-27), not measured behaviour; `❔` means we have not
+tested it rather than that it is absent. Corrections welcome — see
+[docs/comparison.md](docs/comparison.md) for sourcing and the
+[benchmark RFC](docs/competitive-benchmark-rfc.md) for the review process.
+
+| Capability | Mem0 | Zep / Graphiti | Letta (MemGPT) | GPTCache | **Agent Memory** |
+|---|---|---|---|---|---|
+| Read-time decision (replay / inject / verify / skip) | ❌ always injects | ❌ always injects | ⚠️ LLM self-manages | ⚠️ replay only | ✅ REPLAY / RESTORE / VERIFY / NONE |
+| Explainable per-decision scores | ❌ | ❌ | ❌ | ❌ | ✅ `decision.explain()` |
+| Semantic answer cache (skip the LLM call) | ❌ | ❌ | ❌ | ✅ | ✅ |
+| Staleness protection at read time | ⚠️ write-side updates + `expiration_date` | ✅ temporal graph | ❌ | ⚠️ eviction only | ✅ VERIFY + TTL + confidence decay |
+| Adversarial trap-query eval published | ❔ none found | ❔ none found | ❔ none found | ❔ none found | ✅ 34/36 (94%) |
+| LLM / API calls per memory op | 1+ | 1+ | 1+ | 0 | **0** |
+| Local after model assets are installed/cached, zero API keys | ⚠️ self-hostable; needs an LLM for extraction | ⚠️ needs server + LLM | ⚠️ LLM per op | ✅ | ✅ SQLite + local ONNX |
+| Paged context tiers (MemGPT-style) | ❌ | ❌ | ✅ | ❌ | ✅ `memory.paged()` |
+
+Because hosted or model-backed configurations can add an LLM or embedding API
+round-trip per memory operation, their latency includes provider, model, and
+network costs. Exact latency depends on each project's configuration; this
+repository does not publish a universal 100ms–2s floor. Agent Memory resolves
+in-process in SQLite-only mode; measured latency depends on corpus shape and
+cache state (see [performance](#performance) and [stress-testing details](docs/stress-testing.md)).
+
+On *retrieval*, we publish a cleaned-release retrieval-proxy measurement below.
+On *end-to-end accuracy* (LLM answering + judge, where Mem0 and Zep publish),
+we don't quote numbers we haven't measured yet — that stage is
+[next on the roadmap](benchmarks/longmemeval/REPORT.md#roadmap).
+→ Full feature matrix and trade-offs (including where they're better): **[docs/comparison.md](docs/comparison.md)**
+
+### Benchmarked on LongMemEval (ICLR 2025)
+
+LongMemEval is a benchmark for conversational-history retrieval. These results
+measure Agent Memory's RESTORE/retrieval tier, not REPLAY, VERIFY, TTL, or
+end-to-end answer correctness. Each question runs against a separate SQLite
+store containing that question's haystack; aggregate ingestion totals are not
+the size of one queried store. All ingestion uses **zero LLM calls and $0 in API
+charges**:
+
+- **LongMemEval_S** (500 independent ~48-session haystacks; 124K turn-pair
+  entries across all runs): **98.1% session Recall@5** with local ONNX
+  embeddings, 96.0% lexical-only, 10.04ms lexical / 19.56ms semantic p50
+  retrieval. The report includes p90/p95/p99 and run-resource measurements.
+
+- **LongMemEval_M** (500 independent ~500-session haystacks; ~2,500 turn-pair
+  entries per queried store): **87.0% session Recall@5** with lexical retrieval,
+  12.05ms p50. This uses the official cleaned re-release and turn-pair indexing;
+  it is not directly comparable with the paper's original-release session-index
+  baselines.
+
+![LongMemEval_S retrieval by question type](docs/assets/longmemeval_recall.png)
+
+![LongMemEval_M result and published baseline context](docs/assets/longmemeval_vs_baselines.png)
+
+Full methodology, per-type tables, scope notes (what this benchmark does and
+doesn't test), and negative results are in the
+**[benchmark report](benchmarks/longmemeval/REPORT.md)**. Reproduce the semantic
+`_S` result with `uv run python benchmarks/longmemeval/run_retrieval.py --semantic`.
+
+### Real software, not a prototype
+
+Every claim below is reproducible from this repo:
+
+- **34/36 (94%)** on adversarial decision-quality eval, and the 2 misses fail safe (VERIFY, never wrong REPLAY) — `agent-memory eval` ([methodology](docs/benchmarks.md))
+- **LongMemEval retrieval proxy: 98.1% Recall@5 (_S, semantic) · 87.0% (_M, lexical)** — 500 independent haystacks; not an end-to-end or paper-baseline head-to-head, [full report](benchmarks/longmemeval/REPORT.md)
+- **Reproducible stress harness** for synthetically seeded workloads up to 1,000,000 entries; archive the JSON output before publishing a performance claim ([methodology](docs/stress-testing.md))
+- **Stress-test benchmark charts:** latency percentiles, seed throughput, resource use, action mix, and cache/decision rates for lexical FTS5 runs at 10K, 100K, and 1M entries, with workload and archived result JSON documented in [stress-testing](docs/stress-testing.md)
+- **412 collected tests** across 25 test modules — decision quality, concurrency, all 4 backends, MCP server, adapters — run in [CI](https://github.com/TheProdSDE/agent-memory-sdk/actions) on every push
+- Published on [PyPI](https://pypi.org/project/agent-memory-sdk/) and the official [MCP Registry](https://registry.modelcontextprotocol.io/servers/io.github.theprodsde/agent-memory)
+- Ships with a REST API, Streamlit dashboard, CLI, LangChain/LlamaIndex adapters, and async counterparts for memory read/write and decision operations
 
 ---
 
@@ -47,12 +160,12 @@ Adversarial eval: **25/25 (100%)** on trap queries — see [benchmarks](docs/ben
 
 | Use case | Without memory | With Agent Memory | Saving |
 |----------|---------------|-------------------|--------|
-| **Support bot** handling 10k identical FAQ queries/day | Every query costs 1 LLM call | ~75% REPLAY on repeated questions, 0 LLM calls | **75% cost reduction** |
-| **Coding agent** that re-derives project conventions each session | Wastes 2–5 LLM calls per session to "remember" conventions | Workflows are REPLAYED instantly on first query | **No re-derivation overhead** |
+| **Support bot** handling 10k identical FAQ queries/day | Every query costs 1 LLM call | If roughly 75% of requests match reusable memories, those matches can REPLAY without an LLM call | **Potentially lower LLM cost; measure your workload** |
+| **Coding agent** that re-derives project conventions each session | Wastes 2–5 LLM calls per session to "remember" conventions | Conventions stored once are REPLAYED/RESTORED from the first query of every later session | **No re-derivation overhead** |
 | **Research agent** building knowledge over multiple sessions | Each session starts cold; re-reads the same sources | Facts and summaries are RESTORED as context | **Persistent cross-session knowledge** |
 | **Customer onboarding** bot answering the same steps repeatedly | Always generates a response | High-confidence workflows are REPLAYED verbatim | **Consistent identical answers** |
 | **Tool-output caching** for expensive API calls | Calls the external API every time | Results stored with TTL; REPLAY within TTL, re-call after | **Reduced external API cost** |
-| **Policy-compliance agent** that must verify facts before replaying | Silent hallucination risk on stale data | `requires_verification=True` ensures VERIFY fires; stale facts are never replayed silently | **Auditability + safety** |
+| **Policy-compliance agent** that must verify facts before replaying | Silent hallucination risk on stale data | `requires_verification=True` routes relevant matches to VERIFY; low-scoring matches return NONE | **Auditability + safety** |
 
 ### Where Agent Memory saves real money
 
@@ -60,9 +173,9 @@ A GPT-4o call costs ~$0.005. A support agent handling 50,000 queries/day with 70
 - Without memory: 50,000 × $0.005 = **$250/day**
 - With Agent Memory: 15,000 LLM calls + cache misses = **$75/day**
 - **Saving: ~ $175/day (~$64k/year)**
-- Savings can depends on how much query are repeated and similar to the previous questions.
+- Savings depend on your repeat rate and how similar incoming queries are to previously stored ones — measure in your own pipeline.
 
-A REPLAY costs ~0.05ms of in-process computation. An LLM call takes 300–2,000ms and costs tokens.
+REPLAY avoids an LLM call when policy permits it. The latency and cost difference depends on the local workload, provider, model, and network; measure both paths in your own pipeline.
 
 ### Is it right for your use case?
 
@@ -94,7 +207,9 @@ A REPLAY costs ~0.05ms of in-process computation. An LLM call takes 300–2,000m
 | **Multi-agent** | SHARED / NAMESPACED / ISOLATED memory across multiple agents |
 | **Confidence learning** | Event-driven confidence updates + half-life temporal decay |
 | **Memory graph** | Relationship edges, path-finding, clusters, PageRank importance |
-| **Async API** | `aremember`, `aresolve`, `alist`, … — all operations have async counterparts |
+| **Paged context** | MemGPT-style tiers: in-context buffer → recall → archival; bounded working set per query |
+| **Conversation distillation** | `from_conversation()` auto-extracts facts, preferences, and entities from turns |
+| **Async API** | `aremember`, `aresolve`, `alist`, … — memory read/write and decision operations have async counterparts |
 | **TTL & states** | Automatic expiry, archiving, near-duplicate consolidation |
 
 → Full feature reference: **[docs/features.md](docs/features.md)**
@@ -103,53 +218,13 @@ A REPLAY costs ~0.05ms of in-process computation. An LLM call takes 300–2,000m
 
 ## Performance
 
-All numbers are **measured** — no projections. Charts generated from real benchmark runs.
+Latency, CPU, and memory use depend on the corpus, query distribution, cache
+state, embedding mode, machine, and operating system. The bundled harness uses
+a repeatable synthetic workload; it does not establish a production SLA.
 
-### Latency at scale (diverse unique content, no LRU cache)
-
-![resolve() latency vs store size](docs/assets/stress_latency_scale.png)
-
-<!-- PERF:LATENCY:START -->
-| Store size | p50 | p95 | p99 | Notes |
-|-----------|-----|-----|-----|-------|
-| Any size (cache hit) | **0.007ms** | 0.010ms | — | LRU cache, 60–80% of production queries |
-| 500 | **4.2ms** | 5.2ms | 5.6ms | |
-| 1,000 | **5.8ms** | 17ms | 26ms | |
-| 5,000 | **6.6ms** | 7.7ms | 8.7ms | |
-| 10,000 | **8.9ms** | 10ms | 10ms | |
-| 50,000 | **5.5ms** | 8.0ms | 9.3ms | |
-| 100,000 | **7.4ms** | 12ms | 14ms | |
-| 1,000,000 (template-repeated) | 130ms | 310ms | — | Worst case: 32K copies/template |
-<!-- PERF:LATENCY:END -->
-
-> **Key insight:** latency scales with **match count per query**, not total store size. A 1M-entry store with diverse unique memories performs near the 10K numbers.
-
-### Tuning levers (all measured — shipped by default)
-
-![Pareto frontier: latency vs implementation effort](docs/assets/stress_pareto_frontier.png)
-
-| Applied by default | Impact |
-|-------------------|--------|
-| **LRU cache** (5s TTL, 256 entries) | 10ms → **0.007ms** for repeated queries |
-| **Bloom filter** (NONE fast-path) | 0.46ms → **0.010ms** at `keyword_search` level |
-| **Stop-word FTS5 filter** | 12.4ms → **4.3ms** — stops "how/do/i/my" from matching 80% of corpus |
-| **`touch()` commits immediately** | Releases write lock after every REPLAY — no stall for concurrent writers |
-| **PRAGMA cache_size=32MB + mmap** | -4ms vs default 2MB cache |
-| **`_RRFBucket` at module level** | -0.35ms/call — was recreated inside `fuse()` each call |
-| **Dynamic IDF stop words** (≥5K docs) | Filters corpus-saturated terms automatically |
-
-Points on the Pareto frontier above cannot improve latency without increasing implementation effort. LRU cache and Bloom filter are on the frontier — they ship by default.
-
-### Seeding throughput
-
-<!-- PERF:SEEDING:START -->
-| Mode | 10,000 | 100,000 | 1,000,000 |
-|-----|-----|-----|-----|
-| Standard (per-row commit) | ~1min (118/s) | ~15min (110/s) | ~5.6h (50/s) |
-| **Fast-seed** (`--fast-seed`) | **~1s (8,316/s)** | **~13s (7,854/s)** | **~25s (39,913/s)** |
-<!-- PERF:SEEDING:END -->
-
-→ Full methodology, charts, and tuning guide: **[docs/stress-testing.md](docs/stress-testing.md)**
+The current lexical FTS5 benchmark results and charts are archived with their source JSON
+in [the stress-test methodology](docs/stress-testing.md). See that document for
+commands, workload scope, and guidance on interpreting results.
 
 ---
 
@@ -215,11 +290,15 @@ agent-memory remember "How do I reset my password?" \
   "Go to Settings → Security → Reset Password." \
   --type conversation --tags auth,faq
 
-# Ask it back
-agent-memory resolve "I forgot my password"
-# ✅ REPLAY  confidence: 0.87
-# matched: "How do I reset my password?"  stored: 2026-01-01  reused 1×
+# Ask the exact question back → REPLAY (no LLM call needed)
+agent-memory resolve "How do I reset my password?"
+# ✅ REPLAY   confidence: 0.88
 # response: Go to Settings → Security → Reset Password.
+
+# Ask a paraphrase → RESTORE (inject as context, don't answer verbatim)
+agent-memory resolve "I forgot my password"
+# 📋 RESTORE  confidence: 0.77
+# [1] score=0.77  How do I reset my password? → Go to Settings → …
 
 # See what's stored
 agent-memory stats
@@ -404,7 +483,7 @@ Agent Memory is published on the [MCP Registry](https://registry.modelcontextpro
 | **Interfaces** | MCP · FastAPI · Streamlit · CLI |
 | **Adapters** | LangChain `BaseMemory` · LlamaIndex `BaseMemory` |
 | **Search DSA** | Bloom filter (NONE fast-path) · Dynamic IDF stop words · RRF fusion |
-| **Testing** | pytest (270 tests) · ruff · mypy |
+| **Testing** | pytest (412 collected tests) · ruff · mypy |
 | **CI/CD** | GitHub Actions — test matrix 3.10–3.13 → release gate → PyPI |
 
 No API keys required — everything runs locally.
@@ -452,9 +531,22 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)** for dev setup, test commands, and the
 
 ---
 
+## Citation
+
+If you use Agent Memory SDK or its benchmark suite
+in your research, articles, or projects, please
+cite this repository using GitHub's
+**Cite this repository** button.
+
+For reproducible benchmark comparisons, reference
+the exact SDK version, benchmark dataset version,
+configuration, and Git commit.
+
+---
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE).
 
 ---
 

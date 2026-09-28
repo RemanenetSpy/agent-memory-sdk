@@ -1,0 +1,33 @@
+{
+  "n_memories": 100000,
+  "actual_count": 100000,
+  "semantic_search_enabled": false,
+  "cache_enabled": false,
+  "fast_seed": true,
+  "seed_s": 12.4,
+  "seed_rate": 8065.0,
+  "seed_cpu_s": 11.73,
+  "seed_rss_start_mb": 79.2,
+  "seed_rss_end_mb": 135.4,
+  "seed_rss_delta_mb": 56.2,
+  "n_queries": 500,
+  "cache_hit_pct": 32.0,
+  "avg_ms": 3.559,
+  "median_ms": 4.139,
+  "p75_ms": 4.675,
+  "p90_ms": 7.627,
+  "p95_ms": 8.262,
+  "p99_ms": 10.841,
+  "max_ms": 14.954,
+  "actions": {
+    "verify": 126,
+    "none": 187,
+    "replay": 96,
+    "restore": 91
+  },
+  "hit_rate_pct": 62.6,
+  "query_cpu_s": 1.723,
+  "query_rss_start_mb": 187.6,
+  "query_rss_end_mb": 187.7,
+  "query_rss_delta_mb": 0.1
+}

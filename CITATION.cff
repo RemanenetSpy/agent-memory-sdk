@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use Agent Memory SDK or its benchmarks, please cite this software."
+type: software
+title: "Agent Memory SDK"
+authors:
+  - name: "TheProdSDE"
+repository-code: "https://github.com/theprodsde/agent-memory-sdk"
+url: "https://github.com/theprodsde/agent-memory-sdk"
+license: "Apache-2.0"

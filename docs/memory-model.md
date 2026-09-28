@@ -15,7 +15,7 @@ Every stored experience is a `MemoryEntry` — a structured record of a question
 | `confidence` | `float` | 0.0–1.0; updated by `ConfidenceLearner` events |
 | `tags` | `list[str]` | Free-form labels for filtering and graph edges |
 | `metadata` | `dict` | Caller-defined key-value pairs |
-| `requires_verification` | `bool` | Always returns VERIFY, never silent REPLAY |
+| `requires_verification` | `bool` | Routes a relevant match to VERIFY once it clears the restore threshold; lower-scoring matches return NONE |
 | `access_count` | `int` | Incremented on every REPLAY (not RESTORE) |
 | `created_at` | `datetime` | Immutable — set once at store time |
 | `updated_at` | `datetime` | Set on content edits (not on access) |
@@ -33,7 +33,7 @@ The type controls how the decision engine treats the entry — specifically when
 | `conversation` | REPLAY / RESTORE | rarely — conversational exchanges |
 | `fact` | REPLAY if fresh → VERIFY if stale | confidence < threshold or age > half-life |
 | `workflow` | REPLAY if fresh → VERIFY if stale | same as fact |
-| `tool_output` | VERIFY always recommended | result may have changed |
+| `tool_output` | VERIFY when stale or below the verification threshold | result may have changed |
 | `document` | RESTORE always | too long to replay verbatim |
 | `code` | REPLAY / RESTORE | rarely — code doesn't change silently |
 | `summary` | REPLAY / RESTORE | consolidated view of several entries |
@@ -46,7 +46,7 @@ memory.remember(
     "API rate limit",
     "1000 req/min per key",
     type="fact",
-    requires_verification=True,   # always returns VERIFY, even at 100% confidence
+    requires_verification=True,   # relevant matches require verification before reuse
 )
 ```
 
@@ -54,7 +54,13 @@ memory.remember(
 
 ## Memory scopes
 
-Scope provides an isolation namespace for retrieval and listing. Multiple scopes can be queried at once.
+Scope is a **tier**, not a tenant identifier. It says how widely a memory
+applies — this session, this user, this whole workspace — and it can be used to
+narrow retrieval and listing. It does **not** keep two users apart: two users
+both writing at `scope="user"` are in the same tier. For per-user and
+per-session separation, see [Tenants and sessions](#tenants-and-sessions) below.
+
+Multiple scopes can be queried at once.
 
 | Scope | Typical use |
 |-------|-------------|
@@ -73,6 +79,78 @@ memory.remember(query, response, scope="project")
 decision = memory.resolve(query, scope=["user", "global"])
 entries  = memory.list(scope=["project", "team"])
 ```
+
+---
+
+## Tenants and sessions
+
+One store can hold many users, each with many sessions, plus a shared tier every
+user can read. `Memory.scoped()` returns a view that stamps identity on writes
+and applies the matching filter to reads.
+
+```python
+memory = Memory(persist_dir=".agent_memory")
+
+alice    = memory.scoped(user_id="alice")                     # all of alice's sessions
+alice_s3 = memory.scoped(user_id="alice", session_id="s3")    # one session
+shared   = memory.scoped(shared=True)                         # the common tier
+
+alice_s3.remember("Which seat do I prefer?", "Window seat")
+shared.remember("What is the refund window?", "30 days")
+
+alice_s3.resolve("seat preference?")   # session -> user -> shared
+alice.resolve("seat preference?")      # sees the s3 write
+memory.scoped(user_id="bob").resolve("seat preference?")   # NONE
+```
+
+Derive `user_id` and `session_id` from your authenticated application context,
+never from an untrusted request field. Scoped views isolate records after the
+application chooses those identities; they are not an authentication system.
+
+Visibility, narrow to wide:
+
+| View | Sees |
+|------|------|
+| `scoped(user_id=u, session_id=s)` | that session, plus `u`'s session-less memories, plus shared |
+| `scoped(user_id=u)` | every session of `u`, plus shared |
+| `scoped(shared=True)` | shared only |
+
+Writes never widen: a session view writes into that session, and only a
+`shared=True` view writes shared memories. Memories written directly through
+`Memory` carry no `user_id` and are invisible to a user view unless it is built
+with `include_unscoped=True` — otherwise one process-wide store would leak into
+every tenant's view.
+
+Regex-based prompt-injection detection is a heuristic, not a trust boundary.
+When a turn contains tool output, retrieved text, or imported documents, pass
+`source_trusted=False` to `from_conversation()`; the SDK then persists none of
+that turn regardless of its wording. Only promote externally sourced facts
+after your application has independently validated and explicitly re-submitted
+them as trusted input.
+
+The filter is applied **during retrieval, before scoring**, so a decision is
+never computed over another tenant's memories. It is a metadata filter rather
+than an indexed column, so a narrow view over a large shared store escalates to
+a deeper candidate pool when the first pass is crowded out by memories it cannot
+see. For agent-to-agent rather than user-to-user separation, see
+[`MultiAgentMemory`](usage.md).
+
+### Deleting a tenant or a session
+
+```python
+alice.forget_all()                    # every session of one user
+alice_s3.forget_all()                 # one session, rest of the user intact
+shared.forget_all()                   # only the shared tier
+
+memory.forget_where(metadata={"user_id": "alice"})   # same thing, explicit
+memory.forget_where(scope=["session"])               # all session-tier memories
+memory.forget_where(tags=["scratch"])
+memory.forget_where(all=True)                        # wipe the store (explicit)
+```
+
+`forget_where()` includes archived and expired memories: "forget this" must not
+leave a copy behind in another state. It requires at least one filter, or
+`all=True`, so an empty call cannot wipe a store by accident.
 
 ---
 
@@ -132,6 +210,12 @@ A confidence below the `restore_threshold` (default 0.70) causes the entry to be
 | String duration | `"60m"` | 60 minutes |
 | Integer seconds | `3600` | 1 hour |
 | `None` | `None` | Never expires |
+
+Expiry is enforced on the read path: once `expires_at` has passed, the memory is
+not retrieved, resolved, or listed, whether or not `cleanup()` has run.
+`cleanup()` reconciles the stored `state` and can delete expired rows
+(`cleanup(delete=True)`); it is housekeeping, not the thing that makes expiry
+take effect.
 
 ---
 

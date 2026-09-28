@@ -6,10 +6,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from agent_memory.logging_config import get_logger
 from agent_memory.models import MemoryDecision, MemoryEntry, MemoryScope
 
 if TYPE_CHECKING:
     from agent_memory.manager import Memory
+
+log = get_logger(__name__)
 
 
 class IsolationMode(str, Enum):
@@ -132,10 +135,27 @@ class MultiAgentMemory:
     # ------------------------------------------------------------------
 
     def resolve(self, query: str, **kwargs: Any) -> MemoryDecision:
+        """Resolve *query* against only the memories this agent may see.
+
+        The isolation filter is applied during retrieval, not after the
+        decision: a decision computed over another agent's memories would leak
+        it through ``decision.response`` even if the entry were stripped
+        afterwards.
+        """
+        kwargs.setdefault("where", self.visible)
         return self._memory.resolve(query, **kwargs)
 
     async def aresolve(self, query: str, **kwargs: Any) -> MemoryDecision:
         return await asyncio.to_thread(self.resolve, query, **kwargs)
+
+    def visible(self, entry: MemoryEntry) -> bool:
+        """True if *entry* is readable by this agent under the isolation mode."""
+        if self.isolation == IsolationMode.SHARED:
+            return True
+        agent_id = entry.metadata.get("agent_id")
+        if self.isolation == IsolationMode.ISOLATED:
+            return agent_id == self.agent_id
+        return agent_id == self.agent_id or bool(entry.metadata.get("global")) or agent_id is None
 
     def list(
         self,
@@ -154,6 +174,22 @@ class MultiAgentMemory:
             return None
         visible: builtins.list[MemoryEntry] = self._filter_by_isolation([entry])
         return visible[0] if visible else None
+
+    def forget_all(self) -> int:
+        """Delete every memory owned by this agent. Returns the count deleted.
+
+        Other agents' memories are untouched, including ones this agent can
+        read under :attr:`IsolationMode.NAMESPACED`.
+        """
+        deleted = self._memory.forget_where(
+            where=lambda entry: entry.metadata.get("agent_id") == self.agent_id
+        )
+        log.debug("forget_all  agent=%s  deleted=%d", self.agent_id, deleted)
+        return deleted
+
+    async def aforget_all(self) -> int:
+        """Async version of forget_all()."""
+        return await asyncio.to_thread(self.forget_all)
 
     def forget(self, memory_id: str) -> bool:
         """Delete a memory if owned by this agent."""
@@ -210,18 +246,4 @@ class MultiAgentMemory:
     def _filter_by_isolation(
         self, entries: builtins.list[MemoryEntry]
     ) -> builtins.list[MemoryEntry]:
-        if self.isolation == IsolationMode.SHARED:
-            return entries
-
-        result: builtins.list[MemoryEntry] = []
-        for entry in entries:
-            agent_id = entry.metadata.get("agent_id")
-            is_global = bool(entry.metadata.get("global", False))
-
-            if self.isolation == IsolationMode.ISOLATED:
-                if agent_id == self.agent_id:
-                    result.append(entry)
-            else:  # NAMESPACED
-                if agent_id == self.agent_id or is_global or agent_id is None:
-                    result.append(entry)
-        return result
+        return [entry for entry in entries if self.visible(entry)]

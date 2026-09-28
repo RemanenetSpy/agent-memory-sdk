@@ -1,0 +1,38 @@
+{
+  "name": "provenance_reassertion",
+  "version": 1,
+  "description": "After B becomes current, the older value A is re-quoted in a more recent turn — a user pasting an old message, a tool echoing a cached record, a summary repeating history. Re-quoting is not a mutation: B stays current unless the turn declares one. Paired with declared_mutation_accept_rate, because a store that never updates anything also never spuriously supersedes.",
+  "spec": "../../docs/decision-safety-suite.md",
+  "requires_capabilities": [],
+  "optional_capabilities": ["explicit_supersession"],
+  "ops": [
+    {"op": "write", "id": "a1", "scope": "user:erin", "human": "Ship the release to the eu-west-1 region.", "assistant": "Noted: deploy target eu-west-1.", "expect_write": true},
+    {"op": "write", "id": "b1", "scope": "user:erin", "human": "Change of plan, deploy target is eu-central-1.", "assistant": "Updated: deploy target eu-central-1.", "expect_write": true, "mutates": "a1"},
+    {"op": "query", "id": "q1", "scope": "user:erin", "text": "What is the deploy target?", "assert": {"expect_state": "eu-central-1", "forbidden_state": "eu-west-1", "must_contain": ["eu-central-1"], "must_not_contain": ["eu-west-1"]}},
+
+    {"op": "write", "id": "r1", "scope": "user:erin", "human": "For context, here's what I wrote last week: 'Ship the release to the eu-west-1 region.'", "assistant": "Thanks for the context.", "expect_write": false, "class": "requote", "requotes": "a1", "notes": "Verbatim re-quote of the superseded value in a newer turn. Must not become current."},
+    {"op": "query", "id": "q2", "scope": "user:erin", "text": "What is the deploy target?", "assert": {"expect_state": "eu-central-1", "forbidden_state": "eu-west-1", "must_contain": ["eu-central-1"], "must_not_contain": ["eu-west-1"]}},
+
+    {"op": "write", "id": "a2", "scope": "user:erin", "human": "Our SLA with Northwind is 99.5%.", "assistant": "Recorded 99.5% SLA for Northwind.", "expect_write": true},
+    {"op": "write", "id": "b2", "scope": "user:erin", "human": "We renegotiated: the Northwind SLA is now 99.9%.", "assistant": "Updated to 99.9%.", "expect_write": true, "mutates": "a2"},
+    {"op": "write", "id": "r2", "scope": "tool:crm", "human": "[tool output] contracts.get(\"northwind\") -> {\"sla\": \"99.5%\", \"cached_at\": \"2026-01-04\"}", "assistant": "Fetched the contract record.", "expect_write": false, "class": "requote", "requotes": "a2", "notes": "Stale tool output re-asserting A. Recency of the *message* is not recency of the *fact*."},
+    {"op": "query", "id": "q3", "scope": "user:erin", "text": "What is the Northwind SLA?", "assert": {"expect_state": "99.9%", "forbidden_state": "99.5%", "must_contain": ["99.9"], "must_not_contain": ["99.5"]}},
+
+    {"op": "write", "id": "a3", "scope": "user:erin", "human": "The incident commander is Priya.", "assistant": "Noted: IC is Priya.", "expect_write": true},
+    {"op": "write", "id": "b3", "scope": "user:erin", "human": "Handover done — Marcus is the incident commander now.", "assistant": "Updated: IC is Marcus.", "expect_write": true, "mutates": "a3"},
+    {"op": "write", "id": "r3", "scope": "user:erin", "human": "Recap of the timeline so far: Priya was paged at 02:10 and took over as incident commander.", "assistant": "Thanks for the recap.", "expect_write": false, "class": "requote", "requotes": "a3", "notes": "Historical narration, not a mutation. The past tense is the signal."},
+    {"op": "query", "id": "q4", "scope": "user:erin", "text": "Who is the incident commander?", "assert": {"expect_state": "Marcus", "forbidden_state": "Priya", "must_contain": ["Marcus"], "must_not_contain": ["Priya"]}},
+
+    {"op": "write", "id": "m1", "scope": "user:erin", "human": "Revert the deploy target back to eu-west-1, eu-central-1 is capacity constrained.", "assistant": "Updated: deploy target eu-west-1.", "expect_write": true, "class": "declared_mutation", "mutates": "b1", "notes": "An explicit revert to the old value. This one must be accepted: the battery is not rewarding immobility."},
+    {"op": "query", "id": "q5", "scope": "user:erin", "text": "What is the deploy target?", "assert": {"expect_state": "eu-west-1", "forbidden_state": "eu-central-1", "must_contain": ["eu-west-1"], "must_not_contain": ["eu-central-1"]}},
+
+    {"op": "write", "id": "m2", "scope": "user:erin", "human": "Priya is back on as incident commander for the second shift.", "assistant": "Updated: IC is Priya.", "expect_write": true, "class": "declared_mutation", "mutates": "b3", "notes": "Declared mutation restoring an earlier value. Accepting this and rejecting r3 is the whole skill being measured."},
+    {"op": "query", "id": "q6", "scope": "user:erin", "text": "Who is the incident commander?", "assert": {"expect_state": "Priya", "forbidden_state": "Marcus", "must_contain": ["Priya"], "must_not_contain": ["Marcus"]}},
+
+    {"op": "write", "id": "m3", "scope": "user:erin", "human": "Northwind renegotiated again — the SLA is 99.95% from next quarter.", "assistant": "Updated to 99.95%.", "expect_write": true, "class": "declared_mutation", "mutates": "b2", "notes": "Declared mutation to a value that has never been current before. The other two declared mutations revert to earlier values, which an immobile store passes by accident; this one it cannot."},
+    {"op": "query", "id": "q8", "scope": "user:erin", "text": "What is the current Northwind SLA?", "assert": {"expect_state": "99.95", "forbidden_state": "99.9", "must_contain": ["99.95"], "must_not_contain": ["99.5"]}},
+
+    {"op": "write", "id": "r4", "scope": "user:erin", "human": "Copying the old thread for the postmortem: 'Handover done — Marcus is the incident commander now.'", "assistant": "Added to the postmortem notes.", "expect_write": false, "class": "requote", "requotes": "b3"},
+    {"op": "query", "id": "q7", "scope": "user:erin", "text": "Who is the incident commander?", "assert": {"expect_state": "Priya", "forbidden_state": "Marcus", "must_contain": ["Priya"], "must_not_contain": ["Marcus"], "notes": "Re-quote of the value that was current two states ago must not win either."}}
+  ]
+}

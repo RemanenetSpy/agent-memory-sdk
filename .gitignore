@@ -23,3 +23,5 @@ build/
 .agent_memory_demo/
 .pytest_cache/
 .claude/*
+brag-output/*
+.DS_Store

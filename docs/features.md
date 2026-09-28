@@ -78,15 +78,18 @@ docker compose -f docker-compose.dev.yml up -d
 | Type | Behaviour |
 |------|-----------|
 | `conversation` | Standard replay/restore |
-| `fact` | Triggers VERIFY when confidence drops or memory ages |
+| `fact` | Triggers VERIFY when confidence drops below the verify threshold or memory ages |
 | `workflow` | Triggers VERIFY when stale |
-| `tool_output` | Triggers VERIFY; pair with `ttl=` for automatic expiry |
+| `tool_output` | Triggers VERIFY when stale or below the verify threshold; pair with `ttl=` for automatic expiry |
 | `document` | Long-form content, always RESTORE |
 | `code` | Code snippets |
 | `summary` | Consolidated memory (created by `consolidate()`) |
 | `preference` | User settings, high replay priority |
 
-**Scopes** isolate memories:
+**Scopes** classify how broadly a memory applies; they are not tenant
+identifiers. Use `Memory.scoped(user_id=..., session_id=...)` for per-user and
+per-session read/write isolation. Derive those IDs from authenticated
+application context, not untrusted request fields. See [Tenants and sessions](memory-model.md#tenants-and-sessions).
 
 `session` · `user` · `project` · `workspace` · `team` · `global`
 
@@ -196,3 +199,62 @@ Merge near-duplicate memories into summaries:
 created = memory.consolidate(similarity_threshold=0.95)
 # Archived the originals, returned new SUMMARY entries
 ```
+
+---
+
+## Paged Context (Hierarchical Memory)
+
+MemGPT/Letta-style context tiers that keep in-session context bounded instead of
+growing until it rots. Recent turns live in a fixed-size in-context buffer; when
+the buffer fills, the oldest turns page out to recall storage and come back only
+when a query semantically matches them. Archived entries form a third, cold tier
+searched on explicit request.
+
+```python
+paged = memory.paged(context_size=20, recall_top_k=5)
+
+# Add turns — old entries page out to recall automatically
+paged.add_turn("What is Python?", "A programming language.")
+paged.add_turn("Favourite framework?", "FastAPI.")
+
+# Bounded, query-relevant context for the next LLM call
+ctx = paged.get_context("Tell me about Python")
+prompt_block = ctx.format_for_llm()   # in-context buffer + matching recall entries
+
+paged.search_archive("Python version history")  # explicit cold-tier search
+paged.flush_to_recall()                          # page everything out at session end
+```
+
+---
+
+## Conversation Distillation
+
+Extract durable facts, preferences, and entities from a conversation turn and store
+them automatically — so knowledge survives the session instead of dying with the
+context window. Only candidates above `min_confidence` are stored.
+
+```python
+entries = memory.from_conversation(
+    human="My name is Karan and I prefer Python.",
+    assistant="Got it!",
+)
+# → stored entries for the name and the language preference,
+#   each typed, tagged, and confidence-scored by the EntityExtractor
+```
+
+The extractor's prompt-injection patterns are heuristic and cannot establish
+whether arbitrary text is trustworthy. For tool output, retrieved documents,
+and other externally controlled turns, pass `source_trusted=False` to reject
+the whole turn instead of relying on pattern matches:
+
+```python
+entries = memory.from_conversation(
+    human=tool_output,
+    assistant=summary,
+    source_trusted=False,
+)
+# → [] and nothing from this turn is persisted
+```
+
+Only submit externally sourced facts as trusted input after your application
+has independently validated and explicitly promoted them.
