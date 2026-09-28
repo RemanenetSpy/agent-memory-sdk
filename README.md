@@ -150,7 +150,7 @@ Every claim below is reproducible from this repo:
 - **LongMemEval retrieval proxy: 98.1% Recall@5 (_S, semantic) · 87.0% (_M, lexical)** — 500 independent haystacks; not an end-to-end or paper-baseline head-to-head, [full report](benchmarks/longmemeval/REPORT.md)
 - **Reproducible stress harness** for synthetically seeded workloads up to 1,000,000 entries; archive the JSON output before publishing a performance claim ([methodology](docs/stress-testing.md))
 - **Stress-test benchmark charts:** latency percentiles, seed throughput, resource use, action mix, and cache/decision rates for lexical FTS5 runs at 10K, 100K, and 1M entries, with workload and archived result JSON documented in [stress-testing](docs/stress-testing.md)
-- **317 collected tests** across 21 test files — decision quality, concurrency, all 4 backends, MCP server, adapters — run in [CI](https://github.com/TheProdSDE/agent-memory-sdk/actions) on every push
+- **412 collected tests** across 25 test modules — decision quality, concurrency, all 4 backends, MCP server, adapters — run in [CI](https://github.com/TheProdSDE/agent-memory-sdk/actions) on every push
 - Published on [PyPI](https://pypi.org/project/agent-memory-sdk/) and the official [MCP Registry](https://registry.modelcontextprotocol.io/servers/io.github.theprodsde/agent-memory)
 - Ships with a REST API, Streamlit dashboard, CLI, LangChain/LlamaIndex adapters, and async counterparts for memory read/write and decision operations
 
@@ -165,7 +165,7 @@ Every claim below is reproducible from this repo:
 | **Research agent** building knowledge over multiple sessions | Each session starts cold; re-reads the same sources | Facts and summaries are RESTORED as context | **Persistent cross-session knowledge** |
 | **Customer onboarding** bot answering the same steps repeatedly | Always generates a response | High-confidence workflows are REPLAYED verbatim | **Consistent identical answers** |
 | **Tool-output caching** for expensive API calls | Calls the external API every time | Results stored with TTL; REPLAY within TTL, re-call after | **Reduced external API cost** |
-| **Policy-compliance agent** that must verify facts before replaying | Silent hallucination risk on stale data | `requires_verification=True` ensures VERIFY fires; stale facts are never replayed silently | **Auditability + safety** |
+| **Policy-compliance agent** that must verify facts before replaying | Silent hallucination risk on stale data | `requires_verification=True` routes relevant matches to VERIFY; low-scoring matches return NONE | **Auditability + safety** |
 
 ### Where Agent Memory saves real money
 
@@ -483,7 +483,7 @@ Agent Memory is published on the [MCP Registry](https://registry.modelcontextpro
 | **Interfaces** | MCP · FastAPI · Streamlit · CLI |
 | **Adapters** | LangChain `BaseMemory` · LlamaIndex `BaseMemory` |
 | **Search DSA** | Bloom filter (NONE fast-path) · Dynamic IDF stop words · RRF fusion |
-| **Testing** | pytest (317 collected tests) · ruff · mypy |
+| **Testing** | pytest (412 collected tests) · ruff · mypy |
 | **CI/CD** | GitHub Actions — test matrix 3.10–3.13 → release gate → PyPI |
 
 No API keys required — everything runs locally.
@@ -528,6 +528,19 @@ Tag-triggered, fully CI-gated: `git tag v0.x.y && git push origin v0.x.y`
 ## Contributing
 
 See **[CONTRIBUTING.md](CONTRIBUTING.md)** for dev setup, test commands, and the PR checklist.
+
+---
+
+## Citation
+
+If you use Agent Memory SDK or its benchmark suite
+in your research, articles, or projects, please
+cite this repository using GitHub's
+**Cite this repository** button.
+
+For reproducible benchmark comparisons, reference
+the exact SDK version, benchmark dataset version,
+configuration, and Git commit.
 
 ---
 

@@ -32,8 +32,8 @@ def handle(user_query: str) -> str:
 | What you're saving | How to save it |
 |---|---|
 | A validated answer the user accepted | `remember(q, a, confidence=0.95)` |
-| An expensive tool / API result | `type="tool_output", ttl="1h"` — replays within the hour, expires after |
-| A fact that can go stale (rate limits, prices) | `type="fact", requires_verification=True` — always VERIFY, never silent replay |
+| An expensive tool / API result | `type="tool_output", ttl="1h"` — eligible for reuse within the hour; verify-type policy applies |
+| A fact that can go stale (rate limits, prices) | `type="fact", requires_verification=True` — relevant matches go to VERIFY; low-scoring matches return NONE |
 | A user preference | `type="preference", scope="user"` |
 | Project conventions | `type="workflow", scope="project"` |
 | A low-certainty guess | `confidence=0.4` — may restore as context, never replays verbatim |

@@ -23,9 +23,39 @@ pytestmark = pytest.mark.skipif(
 def client(tmp_path):
     from agent_memory.api.server import create_app
 
-    app = create_app(persist_dir=tmp_path, collection_name="api_test", backend="sqlite")
-    with TestClient(app) as c:
+    app = create_app(
+        persist_dir=tmp_path,
+        collection_name="api_test",
+        backend="sqlite",
+        api_key="test-api-key",
+        enable_embeddings=False,
+    )
+    with TestClient(app, headers={"X-API-Key": "test-api-key"}) as c:
         yield c
+
+
+def test_api_requires_authentication_by_default() -> None:
+    from agent_memory.api.server import create_app
+
+    with pytest.raises(ValueError, match="authentication is required"):
+        create_app(allow_unauthenticated=False)
+
+
+def test_api_rejects_missing_or_invalid_api_key(tmp_path) -> None:
+    from agent_memory.api.server import create_app
+
+    app = create_app(persist_dir=tmp_path, api_key="expected-key", enable_embeddings=False)
+    with TestClient(app) as unauthenticated:
+        assert unauthenticated.get("/stats").status_code == 401
+        assert unauthenticated.get("/stats", headers={"X-API-Key": "wrong"}).status_code == 401
+
+
+def test_api_accepts_bearer_api_key(tmp_path) -> None:
+    from agent_memory.api.server import create_app
+
+    app = create_app(persist_dir=tmp_path, api_key="expected-key", enable_embeddings=False)
+    with TestClient(app, headers={"Authorization": "Bearer expected-key"}) as authenticated:
+        assert authenticated.get("/stats").status_code == 200
 
 
 # ---------------------------------------------------------------------------

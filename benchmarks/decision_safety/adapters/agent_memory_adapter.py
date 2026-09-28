@@ -1,16 +1,11 @@
 """Decision Safety Suite v2 adapter for this repository's own SDK.
 
 Published first, and with its own gaps declared, so the suite is not graded on a
-curve it wrote for itself. Four things are worth reading before the numbers:
+curve it wrote for itself. Three things are worth reading before the numbers:
 
-* **Scope isolation is a harness property here, not a system property.**
-  ``MemoryEntry.scope`` is a tier (``session``/``user``/``project``/...), not a
-  tenant identifier, and there is no ``user_id`` on an entry. So a battery scope
-  like ``user:alice`` maps to *its own store*. The cross-scope assertions
-  therefore test this mapping, not the SDK's internal isolation.
-* **``delete_scope`` is emulated.** ``Memory.forget_where()`` is a real bulk
-  delete, but it filters on tier, tags, and metadata — not on a tenant identity.
-  Here it wipes that scope's own store.
+* **Scope isolation uses the SDK's scoped views.** One store is shared per
+    battery, and each battery scope maps to a ``MemoryView`` identity. Cross-scope
+    assertions therefore exercise the SDK's read filter, not separate stores.
 * **``advance_clock`` is emulated** by back-dating stored timestamps, because
   there is no injectable clock. TTL itself is enforced on the read path, so the
   following ``cleanup()`` only reconciles stored state.
@@ -28,6 +23,7 @@ from typing import Any
 
 from agent_memory.manager import Memory
 from agent_memory.models import MemoryAction, MemoryScope
+from agent_memory.scoped import MemoryView
 from benchmarks.decision_safety.adapters.base import (
     CapabilityUnsupported,
     DecisionSafetyAdapter,
@@ -44,7 +40,7 @@ class AgentMemoryAdapter(DecisionSafetyAdapter):
 
     capabilities = {
         "delete_by_id": "supported",          # Memory.forget(memory_id)
-        "delete_scope": "partial",            # forget_where() filters on tier/tags/metadata, not on a tenant identity
+        "delete_scope": "supported",          # MemoryView.forget_all() deletes only owned entries
         "tombstones": "partial",              # archive()/MemoryState.DELETED exist; forget() is a hard delete
         "raw_message_store": "none",          # no separate transcript table; turns become ordinary memories
         "ttl": "supported",                   # expires_at, enforced on the read path
@@ -53,7 +49,7 @@ class AgentMemoryAdapter(DecisionSafetyAdapter):
         "explicit_abstention": "supported",   # MemoryAction.NONE
     }
 
-    emulated_ops = {"delete_scope", "advance_clock"}
+    emulated_ops = {"advance_clock"}
 
     def __init__(
         self,
@@ -79,18 +75,15 @@ class AgentMemoryAdapter(DecisionSafetyAdapter):
         # sentence-transformers all-MiniLM-L6-v2 (agent_memory/embeddings.py).
         self.embedding_model = "sdk-default" if enable_embeddings else "none"
         self._root: Path | None = None
-        self._stores: dict[str, Memory] = {}
+        self._memory: Memory | None = None
         self._offset = timedelta(0)
 
         from agent_memory._version import __version__
 
         self.version = __version__
         self.notes = [
-            "Scope isolation is provided by the harness (one store per battery scope). "
-            "MemoryEntry.scope is a tier, not a tenant id, so the SDK does not isolate "
-            "tenants inside one store.",
-            "delete_scope emulated with forget_where(all=True) against that scope's own "
-            "store; forget_where() filters on tier/tags/metadata, not on a tenant identity.",
+            "One Memory store is shared by all scopes in a battery; each scope maps to "
+            "a MemoryView user_id and is filtered by the SDK's scoped-view architecture.",
             "advance_clock emulated by back-dating stored timestamps, then calling cleanup() "
             "to reconcile stored state; TTL itself is enforced on the read path.",
             f"Ingest path: {self.ingest} "
@@ -116,11 +109,17 @@ class AgentMemoryAdapter(DecisionSafetyAdapter):
     def setup(self, *, battery: str) -> None:
         self.teardown()
         self._root = Path(tempfile.mkdtemp(prefix=f"ds-{battery}-"))
-        self._stores = {}
+        self._memory = Memory(
+            persist_dir=self._root,
+            enable_embeddings=self.enable_embeddings,
+            replay_threshold=self.thresholds["replay"],
+            restore_threshold=self.thresholds["restore"],
+            verify_threshold=self.thresholds["verify"],
+        )
         self._offset = timedelta(0)
 
     def teardown(self) -> None:
-        self._stores = {}
+        self._memory = None
         if self._root and self._root.exists():
             shutil.rmtree(self._root, ignore_errors=True)
         self._root = None
@@ -131,18 +130,9 @@ class AgentMemoryAdapter(DecisionSafetyAdapter):
         tier = scope.split(":", 1)[0]
         return MemoryScope(tier) if tier in _TIERS else MemoryScope.USER
 
-    def _store(self, scope: str) -> Memory:
-        if scope not in self._stores:
-            assert self._root is not None, "setup() was not called"
-            safe = scope.replace(":", "__").replace("/", "_")
-            self._stores[scope] = Memory(
-                persist_dir=self._root / safe,
-                enable_embeddings=self.enable_embeddings,
-                replay_threshold=self.thresholds["replay"],
-                restore_threshold=self.thresholds["restore"],
-                verify_threshold=self.thresholds["verify"],
-            )
-        return self._stores[scope]
+    def _view(self, scope: str) -> MemoryView:
+        assert self._memory is not None, "setup() was not called"
+        return self._memory.scoped(user_id=scope)
 
     # -- ops ---------------------------------------------------------------
 
@@ -156,17 +146,18 @@ class AgentMemoryAdapter(DecisionSafetyAdapter):
         at: datetime | None = None,
         ttl: int | None = None,
     ) -> WriteOutcome:
-        memory = self._store(scope)
+        view = self._view(scope)
+        memory = view.memory
         tier = self._tier(scope)
 
         if ttl is not None:
             # from_conversation() has no TTL parameter, so a TTL op writes
             # verbatim through remember(). Recorded in the op's raw output.
-            entries = [memory.remember(human, assistant, scope=tier, ttl=ttl)]
+            entries = [view.remember(human, assistant, scope=tier, ttl=ttl)]
         elif self.ingest == "extract":
-            entries = memory.from_conversation(human, assistant, scope=tier)
+            entries = view.from_conversation(human, assistant, scope=tier)
         else:
-            entries = [memory.remember(human, assistant, scope=tier)]
+            entries = [view.remember(human, assistant, scope=tier)]
 
         for entry in entries:
             entry.metadata["ds_op"] = op_id
@@ -191,40 +182,35 @@ class AgentMemoryAdapter(DecisionSafetyAdapter):
 
     def delete(self, *, op_id: str, refs: list[str]) -> int:
         deleted = 0
-        for memory in self._stores.values():
+        if self._memory is not None:
             for ref in refs:
-                deleted += int(memory.forget(ref))
+                deleted += int(self._memory.forget(ref))
         return deleted
 
     def delete_scope(self, *, scope: str) -> int:
-        """Emulated: `forget_where` is a bulk delete, but not a per-tenant one.
-
-        Because this adapter maps each battery scope to its own store, wiping
-        the store *is* wiping the scope. A system that keeps many tenants in one
-        store needs a tenant predicate here instead.
-        """
-        return self._store(scope).forget_where(all=True)
+        """Delete only the entries owned by the scoped view."""
+        return self._view(scope).forget_all()
 
     def advance_clock(self, *, seconds: int, now: datetime) -> None:
         """Emulated: shift stored timestamps back, then apply lazy TTL expiry."""
         delta = timedelta(seconds=seconds)
         self._offset += delta
-        for memory in self._stores.values():
-            for entry in memory.list(limit=10_000, include_archived=True):
-                entry.created_at = entry.created_at - delta
-                entry.updated_at = entry.updated_at - delta
-                if entry.last_accessed_at is not None:
-                    entry.last_accessed_at = entry.last_accessed_at - delta
-                if entry.expires_at is not None:
-                    entry.expires_at = entry.expires_at - delta
-                entry.refresh_state()
-                memory.store.update(entry)
-            memory.cleanup()
-            memory.retriever.invalidate_cache()
+        if self._memory is None:
+            return
+        for entry in self._memory.list(limit=10_000, include_archived=True):
+            entry.created_at = entry.created_at - delta
+            entry.updated_at = entry.updated_at - delta
+            if entry.last_accessed_at is not None:
+                entry.last_accessed_at = entry.last_accessed_at - delta
+            if entry.expires_at is not None:
+                entry.expires_at = entry.expires_at - delta
+            entry.refresh_state()
+            self._memory.store.update(entry)
+        self._memory.cleanup()
+        self._memory.retriever.invalidate_cache()
 
     def query(self, *, scope: str, text: str, top_k: int) -> QueryOutcome:
-        memory = self._store(scope)
-        decision = memory.resolve(text, top_k=top_k)
+        decision = self._view(scope).resolve(text, top_k=top_k)
 
         # Score only what the caller is actually handed. On MemoryAction.NONE the
         # SDK's answer is "use nothing", even though `decision.context` still
@@ -269,15 +255,24 @@ class AgentMemoryAdapter(DecisionSafetyAdapter):
         )
 
     def inspect(self, *, scope: str) -> dict[str, Any]:
-        memory = self._store(scope)
+        view = self._view(scope)
+        memory = view.memory
         # `raw_turns` counts every *retained* verbatim turn, including archived
         # and expired ones: the battery's question is what could still be
         # re-extracted, and an expired row is still a row. `live_raw_turns` is
         # the subset the read path would serve.
-        retained = memory.store.list_all(
-            limit=10_000, include_archived=True, include_expired=True
-        )
-        live = memory.list(limit=10_000, include_archived=True)
+        retained = [
+            entry
+            for entry in memory.store.list_all(
+                limit=10_000, include_archived=True, include_expired=True
+            )
+            if view.owns(entry)
+        ]
+        live = [
+            entry
+            for entry in view.list(limit=10_000, include_archived=True)
+            if view.owns(entry)
+        ]
         return {
             "raw_turns": sum(1 for e in retained if e.metadata.get("raw_turn")),
             "live_raw_turns": sum(1 for e in live if e.metadata.get("raw_turn")),

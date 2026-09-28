@@ -487,6 +487,7 @@ class Memory:
         min_confidence: float = 0.75,
         extractor: EntityExtractor | None = None,
         metadata: dict | None = None,
+        source_trusted: bool = True,
     ) -> builtins.list[MemoryEntry]:
         """Extract and store memories from a single conversation turn.
 
@@ -498,6 +499,10 @@ class Memory:
         :class:`~agent_memory.scoped.MemoryView` stamps tenant identity onto
         extracted memories.
 
+        Set *source_trusted* to ``False`` for tool output, retrieved documents,
+        or other externally controlled turns. Those turns are never persisted;
+        pattern-based injection detection is only a supplemental defense.
+
         Returns the list of newly stored :class:`~agent_memory.models.MemoryEntry` objects.
 
         Usage::
@@ -507,6 +512,8 @@ class Memory:
                 assistant="Got it!",
             )
         """
+        if not source_trusted:
+            return []
         mem_scope = MemoryScope(scope) if isinstance(scope, str) else scope
         ext = extractor or EntityExtractor()
         candidates: builtins.list[ExtractedMemory] = ext.extract_from_turn(
@@ -515,6 +522,8 @@ class Memory:
         stored: builtins.list[MemoryEntry] = []
         log.debug("from_conversation  candidates=%d  min_conf=%.2f", len(candidates), min_confidence)
         for c in candidates:
+            if "injection-suspected" in c.tags:
+                continue
             if c.confidence < min_confidence:
                 continue
             entry = self.remember(
@@ -539,6 +548,7 @@ class Memory:
         min_confidence: float = 0.75,
         extractor: EntityExtractor | None = None,
         metadata: dict | None = None,
+        source_trusted: bool = True,
     ) -> builtins.list[MemoryEntry]:
         """Async version of :meth:`from_conversation`."""
         return await asyncio.to_thread(
@@ -549,6 +559,7 @@ class Memory:
             min_confidence=min_confidence,
             extractor=extractor,
             metadata=metadata,
+            source_trusted=source_trusted,
         )
 
     # ------------------------------------------------------------------

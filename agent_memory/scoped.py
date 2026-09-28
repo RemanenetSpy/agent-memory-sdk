@@ -93,6 +93,15 @@ class MemoryView:
             metadata[SESSION_KEY] = self.session_id
         return metadata
 
+    def _stamp_metadata(self, metadata: dict[str, Any] | None) -> dict[str, Any]:
+        stamped = {
+            key: value
+            for key, value in (metadata or {}).items()
+            if key not in {USER_KEY, SESSION_KEY, SHARED_KEY}
+        }
+        stamped.update(self.write_metadata)
+        return stamped
+
     def visible(self, entry: MemoryEntry) -> bool:
         """True if *entry* may be read through this view."""
         metadata = entry.metadata or {}
@@ -123,7 +132,7 @@ class MemoryView:
 
     def remember(self, query: str, response: str, **kwargs: Any) -> MemoryEntry:
         """Store a memory owned by this view."""
-        metadata = {**(kwargs.pop("metadata", None) or {}), **self.write_metadata}
+        metadata = self._stamp_metadata(kwargs.pop("metadata", None))
         return self.memory.remember(query, response, metadata=metadata, **kwargs)
 
     async def aremember(self, query: str, response: str, **kwargs: Any) -> MemoryEntry:
@@ -134,7 +143,7 @@ class MemoryView:
         self, human: str, assistant: str, **kwargs: Any
     ) -> builtins.list[MemoryEntry]:
         """Extract memories from one turn, stamped with this view's identity."""
-        metadata = {**(kwargs.pop("metadata", None) or {}), **self.write_metadata}
+        metadata = self._stamp_metadata(kwargs.pop("metadata", None))
         return self.memory.from_conversation(human, assistant, metadata=metadata, **kwargs)
 
     # -- reads -------------------------------------------------------------
@@ -170,8 +179,9 @@ class MemoryView:
     # -- deletes -----------------------------------------------------------
 
     def forget(self, memory_id: str) -> bool:
-        """Delete one memory, only if this view can see it."""
-        if self.get(memory_id) is None:
+        """Delete one memory only if this view owns it."""
+        entry = self.get(memory_id)
+        if entry is None or not self.owns(entry):
             return False
         return self.memory.forget(memory_id)
 

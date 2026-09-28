@@ -9,7 +9,7 @@ A high-confidence exact or near-exact match means the stored answer is directly 
 For memories of type `fact`, `workflow`, or `tool_output` when either:
 - Their score falls below `verify_threshold` (default 0.80), or
 - They are older than `recency_half_life_days` (default 30 days), or
-- `requires_verification=True` was set at store time (always VERIFY regardless of score).
+- `requires_verification=True` was set at store time and the candidate clears the restore threshold. Below that threshold, the correct action is NONE.
 
 **Why does NONE fire even though there's a related memory?**
 The composite score (semantic + recency + confidence + usage) is below the restore threshold. This prevents the "shared-word trap" — a memory about payment methods doesn't answer a question about two-factor authentication just because both mention "support".
@@ -25,15 +25,16 @@ By default `restore_threshold=0.70`. Below this, the action is NONE. Raise it to
 Yes. Auto-saving every turn fills the store with low-quality junk. Your application decides what's worth remembering by calling `remember()` after a validated answer.
 
 **How do I stop a fact from replaying stale data?**
-Set `requires_verification=True` at store time. The entry will always return VERIFY, prompting the agent to re-check the answer before reusing it.
+Set `requires_verification=True` at store time. A sufficiently relevant match returns VERIFY instead of REPLAY or RESTORE; a candidate below the restore threshold returns NONE and is not used.
 
 **How do I share memory between multiple processes?**
 Point all processes at the same `persist_dir`. SQLite WAL mode makes concurrent reads safe. The MCP server, CLI, and Python SDK can all share one directory.
 
 **How do I isolate memories between users?**
-Use `scope="user"` when storing and filter by scope when resolving:
+Use a scoped view for per-user isolation. Derive the user ID from authenticated application context; `scope="user"` alone is only a tier label:
 ```python
-decision = memory.resolve(query, scope=["user", "global"])
+alice = memory.scoped(user_id=authenticated_user_id)
+decision = alice.resolve(query)
 ```
 
 ---

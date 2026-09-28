@@ -120,6 +120,43 @@ _SENT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
 # ---------------------------------------------------------------------------
+# Injection detection patterns
+# ---------------------------------------------------------------------------
+
+# Patterns that indicate an injected instruction rather than a genuine user statement.
+# These are matched against the human turn text. If matched, the extraction is
+# either rejected or flagged with requires_verification=True and low confidence.
+_INJECTION_PATTERNS: list[re.Pattern[str]] = [
+    # Direct instruction to the assistant/agent
+    re.compile(r"\b(?:NOTE TO|INSTRUCTION TO|SYSTEM:|ASSISTANT:|AGENT:)\s*(?:remember|store|save|note)\b", re.I),
+    # "remember that..." when not in a natural user context
+    re.compile(r"\b(?:please\s+)?remember\s+that\s+(?:the\s+)?(?:refund|password|address|account|policy|window|limit|rate|key|secret|token)\b", re.I),
+    # Disregard/ignore previous instructions
+    re.compile(r"\b(?:disregard|ignore|forget)\s+(?:previous|prior|earlier|all)\s+(?:instructions?|preferences?|policies?|memories?)\b", re.I),
+    # Credential exfiltration attempts
+    re.compile(r"\b(?:admin|root|system|master)\s+(?:password|key|secret|token)\s+(?:is|:)\s*\w+", re.I),
+    # Third-party assertion of first-party facts
+    re.compile(r"\b(?:colleague|friend|someone|they|he|she)\s+(?:said|sent|told)\s+(?:me\s+)?(?:to\s+)?(?:remember|note)\s+that\s+(?:my|your|their)\b", re.I),
+    # Third-party assertion with "this:" or similar intro
+    re.compile(r"\b(?:colleague|friend|someone|they|he|she)\s+(?:said|sent|told)\s+(?:me\s+)?(?:this|that)\s*:\s*.*\b(?:please\s+)?remember\s+that\s+(?:my|your|their|[A-Z][a-z]+'s)\b", re.I),
+    # Tool output injection markers
+    re.compile(r"\[(?:tool\s+output|system|assistant)\]\s*.*\bremember\s+that\b", re.I),
+    # Summarization/request injection
+    re.compile(r"\b(?:summari[sz]e|summary)\s+(?:this|the)\s+(?:thread|conversation|chat)\b.*\bremember\s+that\b", re.I),
+    # "Disregard and remember" pattern
+    re.compile(r"\bdisregard\s+(?:previous|prior)\s+(?:preferences?|instructions?)\s+and\s+remember\b", re.I),
+]
+
+
+def _looks_like_injection(text: str) -> bool:
+    """Check if text contains patterns typical of prompt injection attempts."""
+    for pattern in _INJECTION_PATTERNS:
+        if pattern.search(text):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Extractor
 # ---------------------------------------------------------------------------
 
@@ -145,7 +182,15 @@ class EntityExtractor:
     # ------------------------------------------------------------------
 
     def extract(self, text: str) -> list[ExtractedMemory]:
-        """Extract candidate memories from *text* (a sentence, paragraph, or turn)."""
+        """Extract candidate memories from *text* (a sentence, paragraph, or turn).
+
+        Injection attempts (e.g., "NOTE TO ASSISTANT: remember that...") are
+        detected and either rejected or flagged with requires_verification=True
+        and reduced confidence.
+        """
+        # Check for injection patterns in the input text
+        is_injection = _looks_like_injection(text)
+
         candidates: list[ExtractedMemory] = []
         for pattern, mtype, conf, tag_str, query_tmpl in _PATTERNS:
             for m in pattern.finditer(text):
@@ -155,14 +200,23 @@ class EntityExtractor:
                 query = query_tmpl
                 response = value
                 tags = [t.strip() for t in tag_str.split(",") if t.strip()]
+
+                # If injection detected, flag for verification and reduce confidence
+                requires_v = (mtype == MemoryType.FACT and conf < 0.85)
+                final_conf = conf
+                if is_injection:
+                    requires_v = True
+                    final_conf = min(conf, 0.50)  # Cap confidence for suspicious content
+                    tags.append("injection-suspected")
+
                 candidates.append(
                     ExtractedMemory(
                         query=query,
                         response=response,
                         memory_type=mtype,
-                        confidence=conf,
+                        confidence=final_conf,
                         tags=tags,
-                        requires_verification=(mtype == MemoryType.FACT and conf < 0.85),
+                        requires_verification=requires_v,
                     )
                 )
 
@@ -178,11 +232,27 @@ class EntityExtractor:
         *,
         scope: MemoryScope = MemoryScope.USER,
     ) -> list[ExtractedMemory]:
-        """Extract from a single conversation turn (human + assistant text)."""
+        """Extract from a single conversation turn (human + assistant text).
+
+        Injection detection runs on the human turn, since that's where
+        prompt injections typically arrive (user input, tool output, retrieved docs).
+        """
+        # Check human turn for injection patterns
+        human_injection = _looks_like_injection(human)
+
         # Mine the human turn for facts/preferences about the user
         human_candidates = self.extract(human)
+
+        # If injection detected in human turn, flag all human-derived candidates
+        if human_injection:
+            for c in human_candidates:
+                c.requires_verification = True
+                c.confidence = min(c.confidence, 0.50)
+                if "injection-suspected" not in c.tags:
+                    c.tags.append("injection-suspected")
+
         # Mine the assistant turn for facts / answers it stated
-        assistant_candidates = self._extract_facts_from_answer(human, assistant)
+        assistant_candidates = self._extract_facts_from_answer(human, assistant, human_injection=human_injection)
         return self._deduplicate(human_candidates + assistant_candidates)
 
     def extract_from_conversation(
@@ -224,7 +294,7 @@ class EntityExtractor:
     # ------------------------------------------------------------------
 
     def _extract_facts_from_answer(
-        self, question: str, answer: str
+        self, question: str, answer: str, *, human_injection: bool = False
     ) -> list[ExtractedMemory]:
         """Treat the Q→A pair as a single memorable fact."""
         q = question.strip().rstrip("?")
@@ -241,12 +311,17 @@ class EntityExtractor:
         requires_v = mtype == MemoryType.FACT and bool(
             re.search(r"\b(?:limit|rate|price|cost|version|deadline)\b", answer, re.I)
         )
+        # If injection detected in human turn, flag this candidate too
+        if human_injection:
+            requires_v = True
+            confidence = min(confidence, 0.50)
         return [ExtractedMemory(
             query=question.strip(),
             response=answer.strip(),
             memory_type=mtype,
             confidence=confidence,
             requires_verification=requires_v,
+            tags=["injection-suspected"] if human_injection else [],
         )]
 
     def _spacy_extract(self, text: str) -> list[ExtractedMemory]:

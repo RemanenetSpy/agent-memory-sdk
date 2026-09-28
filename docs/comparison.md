@@ -42,7 +42,7 @@ welcome and will be applied — see the
 | **Trap-query protection** | ❔ not measured | ❔ not measured | ❔ not measured | ❔ not measured | ❔ not measured | ❔ not measured | ❔ not measured | ✅ 34/36 adversarial trap cases; misses fail safe to VERIFY, never wrong REPLAY |
 | **Local / offline** | ✅ self-hosted | ⚠️ self-hostable (local vector store + local LLM); cloud is the documented default | ⚠️ open-source but needs server + OpenAI | ⚠️ needs LLM provider | ⚠️ needs LLM provider | ✅ self-hostable | ⚠️ heavy; LLM call per op | ✅ SQLite + ONNX MiniLM, zero API keys; workload-specific latency |
 | **Confidence / trust model** | ❌ | ❌ | ❌ | ❌ | ❌ | Cosine only | ❌ | ✅ per-entry confidence; event-driven updates; half-life decay |
-| **Verification semantics** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ `requires_verification=True` → always VERIFY, never silent replay |
+| **Verification semantics** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ `requires_verification=True` → VERIFY for relevant matches; low-scoring matches return NONE |
 | **TTL / expiry** | ✅ native | ✅ `expiration_date` (day granularity; expired memories hidden) | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ any entry, second granularity; `ttl="30d"` / `ttl=3600` |
 | **Multi-agent isolation** | Manual prefix | User/agent hierarchy | Session-scoped | ❌ | ❌ | Manual collection | ❌ | ✅ NAMESPACED / ISOLATED / SHARED; broadcast; transfer |
 | **Memory graph** | ❌ | Internal entity graph | ✅ entity + knowledge graph | ❌ | ❌ | ❌ | ❌ | ✅ similarity + tag edges; BFS; clusters; PageRank |
@@ -74,7 +74,7 @@ agent-memory-sdk       → NONE  confidence=0.61  reason: "below restore thresho
 Zero API keys. SQLite + FTS5 runs in-process; the optional ONNX embedding model loads locally. MemGPT/Letta makes an LLM API call per memory operation. mem0 and Zep default to cloud. Benchmark latency against your corpus using the documented harness.
 
 ### 4. Verification semantics
-Facts, workflows, and tool outputs can be flagged `requires_verification=True`. They always return VERIFY — never silently replayed — so stale rate limits, prices, or policies are never served verbatim without validation. No other tool has this concept.
+Facts, workflows, and tool outputs use verification rules when they are stale or fall below the verification threshold. An explicit `requires_verification=True` routes a sufficiently relevant match to VERIFY rather than replay; a candidate below the restore threshold returns NONE. No other tool has this concept.
 
 ### 5. Automatic entity extraction from conversation
 `memory.from_conversation(human, assistant)` runs regex + optional spaCy NER over a raw conversation turn and auto-stores facts, preferences, and named entities — no manual `remember()` needed.

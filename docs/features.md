@@ -78,15 +78,18 @@ docker compose -f docker-compose.dev.yml up -d
 | Type | Behaviour |
 |------|-----------|
 | `conversation` | Standard replay/restore |
-| `fact` | Triggers VERIFY when confidence drops or memory ages |
+| `fact` | Triggers VERIFY when confidence drops below the verify threshold or memory ages |
 | `workflow` | Triggers VERIFY when stale |
-| `tool_output` | Triggers VERIFY; pair with `ttl=` for automatic expiry |
+| `tool_output` | Triggers VERIFY when stale or below the verify threshold; pair with `ttl=` for automatic expiry |
 | `document` | Long-form content, always RESTORE |
 | `code` | Code snippets |
 | `summary` | Consolidated memory (created by `consolidate()`) |
 | `preference` | User settings, high replay priority |
 
-**Scopes** isolate memories:
+**Scopes** classify how broadly a memory applies; they are not tenant
+identifiers. Use `Memory.scoped(user_id=..., session_id=...)` for per-user and
+per-session read/write isolation. Derive those IDs from authenticated
+application context, not untrusted request fields. See [Tenants and sessions](memory-model.md#tenants-and-sessions).
 
 `session` · `user` · `project` · `workspace` · `team` · `global`
 
@@ -238,3 +241,20 @@ entries = memory.from_conversation(
 # → stored entries for the name and the language preference,
 #   each typed, tagged, and confidence-scored by the EntityExtractor
 ```
+
+The extractor's prompt-injection patterns are heuristic and cannot establish
+whether arbitrary text is trustworthy. For tool output, retrieved documents,
+and other externally controlled turns, pass `source_trusted=False` to reject
+the whole turn instead of relying on pattern matches:
+
+```python
+entries = memory.from_conversation(
+    human=tool_output,
+    assistant=summary,
+    source_trusted=False,
+)
+# → [] and nothing from this turn is persisted
+```
+
+Only submit externally sourced facts as trusted input after your application
+has independently validated and explicitly promoted them.

@@ -15,7 +15,7 @@ Every stored experience is a `MemoryEntry` — a structured record of a question
 | `confidence` | `float` | 0.0–1.0; updated by `ConfidenceLearner` events |
 | `tags` | `list[str]` | Free-form labels for filtering and graph edges |
 | `metadata` | `dict` | Caller-defined key-value pairs |
-| `requires_verification` | `bool` | Always returns VERIFY, never silent REPLAY |
+| `requires_verification` | `bool` | Routes a relevant match to VERIFY once it clears the restore threshold; lower-scoring matches return NONE |
 | `access_count` | `int` | Incremented on every REPLAY (not RESTORE) |
 | `created_at` | `datetime` | Immutable — set once at store time |
 | `updated_at` | `datetime` | Set on content edits (not on access) |
@@ -33,7 +33,7 @@ The type controls how the decision engine treats the entry — specifically when
 | `conversation` | REPLAY / RESTORE | rarely — conversational exchanges |
 | `fact` | REPLAY if fresh → VERIFY if stale | confidence < threshold or age > half-life |
 | `workflow` | REPLAY if fresh → VERIFY if stale | same as fact |
-| `tool_output` | VERIFY always recommended | result may have changed |
+| `tool_output` | VERIFY when stale or below the verification threshold | result may have changed |
 | `document` | RESTORE always | too long to replay verbatim |
 | `code` | REPLAY / RESTORE | rarely — code doesn't change silently |
 | `summary` | REPLAY / RESTORE | consolidated view of several entries |
@@ -46,7 +46,7 @@ memory.remember(
     "API rate limit",
     "1000 req/min per key",
     type="fact",
-    requires_verification=True,   # always returns VERIFY, even at 100% confidence
+    requires_verification=True,   # relevant matches require verification before reuse
 )
 ```
 
@@ -103,6 +103,10 @@ alice.resolve("seat preference?")      # sees the s3 write
 memory.scoped(user_id="bob").resolve("seat preference?")   # NONE
 ```
 
+Derive `user_id` and `session_id` from your authenticated application context,
+never from an untrusted request field. Scoped views isolate records after the
+application chooses those identities; they are not an authentication system.
+
 Visibility, narrow to wide:
 
 | View | Sees |
@@ -116,6 +120,13 @@ Writes never widen: a session view writes into that session, and only a
 `Memory` carry no `user_id` and are invisible to a user view unless it is built
 with `include_unscoped=True` — otherwise one process-wide store would leak into
 every tenant's view.
+
+Regex-based prompt-injection detection is a heuristic, not a trust boundary.
+When a turn contains tool output, retrieved text, or imported documents, pass
+`source_trusted=False` to `from_conversation()`; the SDK then persists none of
+that turn regardless of its wording. Only promote externally sourced facts
+after your application has independently validated and explicitly re-submitted
+them as trusted input.
 
 The filter is applied **during retrieval, before scoring**, so a decision is
 never computed over another tenant's memories. It is a metadata filter rather

@@ -12,12 +12,14 @@ Artifacts: `agent_memory.<config>.json` (metrics) and `.raw.json` (every op).
 
 ## Configurations
 
-All three run the same batteries against the same SDK commit, on one machine,
-with `top_k=5`, cold cache, and `Memory.from_conversation()` as the ingest path.
+The lexical configuration was rerun against the shared-store `MemoryView`
+architecture with `top_k=5`, cold cache, and scoped `from_conversation()` writes.
+The semantic configurations have not been rerun against this architecture; their
+existing artifacts are historical and are not comparable to the lexical run.
 
 Battery set SHA256 `0dbb9a8cac7a77c9…` (over all six battery files), SDK
-`0.1.5.dev25+g893abc6bb`, Python 3.13.13, macOS arm64. Each artifact carries the
-full hash, command line, and configuration.
+`0.1.6.dev11+gb5c7b8599.d20260927`, Python 3.13.13, macOS arm64. The lexical
+artifact carries the full hash, command line, and configuration.
 
 | Config | Retrieval | Abstention gate (`restore_threshold`) |
 |---|---|---|
@@ -27,62 +29,57 @@ full hash, command line, and configuration.
 
 ## Results
 
-| Battery | Metric | `lexical` | `semantic` | `semantic-gate045` |
+| Battery | Metric | `lexical` (scoped rerun) | `semantic` | `semantic-gate045` |
 |---|---|---|---|---|
-| `deletion_durability` | `deletion_resurrection_rate` | 0.00 | 0.00 | 0.00 |
-| | `reextraction_resurrection_rate` | 0.00 | 0.00 | 0.00 |
-| | `raw_turn_survival_rate` | 0.00 | 0.00 | 0.00 |
-| | **`post_delete_recall`** *(pair)* | 0.50 | **0.00** | 1.00 |
-| `ttl_expiry` | `expired_reuse_rate` | 0.00 | 0.00 | 0.00 |
-| | `repeat_query_expired_reuse_rate` | 0.00 | 0.00 | 0.00 |
-| | **`live_recall`** *(pair)* | 1.00 | **0.33** | 1.00 |
-| `poisoned_write` | `injection_write_rate` | 1.00 | 1.00 | 1.00 |
-| | `injection_replay_rate` | 0.40 | 0.00 | 0.80 |
-| | **`benign_write_rate`** *(pair)* | 1.00 | 1.00 | 1.00 |
-| | **`false_quarantine_rate`** *(pair)* | 0.00 | 0.00 | 0.00 |
-| `state_invalidation` | `stale_current_state_rate` | 0.43 | 0.00 | 0.86 |
-| | **`current_state_accuracy`** *(pair)* | 0.14 | **0.00** | 0.57 |
-| | `invalidation_lag_writes` | n/a | n/a | n/a |
-| `provenance_reassertion` | `spurious_supersession_rate` | 0.75 | 0.00 | 0.75 |
-| | **`declared_mutation_accept_rate`** *(pair)* | 0.33 | **0.00** | 0.33 |
-| `point_in_time` | — | `unsupported` | `unsupported` | `unsupported` |
+| `deletion_durability` | `deletion_resurrection_rate` | 0.00 | not rerun | not rerun |
+| | `reextraction_resurrection_rate` | 0.00 | not rerun | not rerun |
+| | `raw_turn_survival_rate` | 0.00 | not rerun | not rerun |
+| | **`post_delete_recall`** *(pair)* | 0.50 | not rerun | not rerun |
+| `ttl_expiry` | `expired_reuse_rate` | 0.00 | not rerun | not rerun |
+| | `repeat_query_expired_reuse_rate` | 0.00 | not rerun | not rerun |
+| | **`live_recall`** *(pair)* | 1.00 | not rerun | not rerun |
+| `poisoned_write` | `injection_write_rate` | 0.00 | not rerun | not rerun |
+| | `injection_replay_rate` | 0.00 | not rerun | not rerun |
+| | **`benign_write_rate`** *(pair)* | 1.00 | not rerun | not rerun |
+| | **`false_quarantine_rate`** *(pair)* | 0.00 | not rerun | not rerun |
+| `state_invalidation` | `stale_current_state_rate` | 0.43 | not rerun | not rerun |
+| | **`current_state_accuracy`** *(pair)* | 0.14 | not rerun | not rerun |
+| | `invalidation_lag_writes` | n/a | not rerun | not rerun |
+| `provenance_reassertion` | `spurious_supersession_rate` | 0.75 | not rerun | not rerun |
+| | **`declared_mutation_accept_rate`** *(pair)* | 0.33 | not rerun | not rerun |
+| `point_in_time` | — | `unsupported` | not rerun | not rerun |
 
 ## What these numbers say
 
-**The `semantic` column is why unpaired safety metrics are banned.** Read alone,
-it is a flawless run: zero stale state, zero spurious supersession, zero
-injection replay. Read with its pairs, it is a system that answered almost
-nothing at all — `current_state_accuracy` 0.00, `post_delete_recall` 0.00,
-`declared_mutation_accept_rate` 0.00, `live_recall` 0.33. Across the 42 queries it
-refused in that run, the best candidate scored 0.328–0.697 (median 0.642) — every
-one of them under the default 0.70 gate, so the decision layer returned `NONE`
-while holding the right memory. A single-number "decision safety score" would
-have ranked this configuration best.
+**Only the lexical column is a scoped-view measurement.** The semantic model
+was unavailable locally and its download failed TLS certificate verification;
+those configurations must be rerun before drawing comparisons.
 
-**Injection defence: none.** `injection_write_rate` is 1.00 in every
-configuration. `from_conversation()` stores an injected `remember that...`
-payload as readily as a real user statement — no provenance check, no
-instruction detection. `benign_write_rate` 1.00 and `false_quarantine_rate` 0.00
-confirm nothing is being quarantined, so the low replay rates in the stricter
-configurations are abstention, not filtering. This is the clearest gap the suite
-found in our own system.
+**Injection defence: active in the verified lexical run.** `injection_write_rate`
+and `injection_replay_rate` are both 0.00, while `benign_write_rate` is 1.00
+and `false_quarantine_rate` is 0.00. The extractor tags suspicious candidates;
+`from_conversation()` now rejects those candidates before persistence. The
+scoped adapter also uses one shared store and real `MemoryView` identities, so
+cross-scope reads exercise SDK filtering. q7 still fails its positive recall
+assertion: the correct window-seat candidate scores 0.5768, below the 0.70
+restore threshold, so the decision abstains. The aisle preference is not
+surfaced.
 
 **Supersession: none.** `explicit_supersession` is declared `unsupported`, and it
 shows. At the usable gate (0.45), a superseded value is returned as current in
-86% of current-state queries, and `invalidation_lag_writes` is `n/a` in every
-config — no current-state query ever came back with the new value and without
+86% of current-state queries in the historical gate-0.45 run, and
+`invalidation_lag_writes` is `n/a` in the lexical run — no current-state query
+ever came back with the new value and without
 the old one, so there is no lag to measure. `spurious_supersession_rate` 0.75
 says a re-quoted old value wins too. Recency and confidence scoring are not a
 substitute for a supersede edge.
 
-**Deletion: clean.** Nothing resurrected through recall, through a later answer,
-or through re-extraction on the next write, and no raw turns survived a
-scope-wide delete. That is partly architectural — extraction is stateless, so
-there is no transcript to re-derive from — and partly a property of the harness
-mapping (see caveats).
+**Deletion: no resurrection in the lexical run.** The scoped view's
+`forget_all()` removes owned entries. The paired post-delete recall is 0.50;
+one unrelated live-memory assertion failed in this run.
 
-**TTL: clean now, and it was not before.** `ttl_expiry` reports 0.00 reuse in
-every configuration, including on a query repeated verbatim from before expiry.
+**TTL: clean in the lexical run.** `ttl_expiry` reports 0.00 reuse, including on
+a query repeated verbatim from before expiry.
 That case failed when the battery was written: the retriever's 5-second result
 cache could outlive a memory's own TTL and replay an expired memory even though
 the store's read path filtered it. The fix and its regression test ship in the
@@ -95,22 +92,15 @@ emulate it.
 
 ## Caveats
 
-1. **Scope isolation here is the harness's, not the SDK's.** `MemoryEntry.scope`
-   is a tier (`user`/`project`/...), not a tenant identifier, so the adapter maps
-   each battery scope to its own store. The cross-scope assertions therefore test
-   that mapping. One consequence is visible in the numbers: the `tool:crm`
-   injection in `poisoned_write` cannot reach `user:carol` here, so its replay is
-   unmeasurable rather than prevented.
-2. **`advance_clock` is emulated** by back-dating stored timestamps; the SDK has
+1. **`advance_clock` is emulated** by back-dating stored timestamps; the SDK has
    no injectable clock.
-3. **`delete_scope` is emulated** with `forget_where(all=True)` against a
-   per-scope store.
-4. **One run per configuration.** Latency and resource numbers are not reported
-   here, so the RFC's five-run rule does not apply, but the retrieval path is
-   deterministic in the `lexical` config and near-deterministic in the others.
-5. **Thresholds are not tuned to the suite.** Two of the three configurations use
+2. **Semantic reruns are blocked** because the fastembed model is not cached and
+   its download fails TLS certificate verification in this environment.
+3. **One run for the lexical configuration.** Latency and resource numbers are
+   not reported here, so the RFC's five-run rule does not apply.
+4. **Thresholds are not tuned to the suite.** The lexical configuration uses
    SDK defaults. `semantic-gate045` is included to show the trade, not as a
-   recommended setting.
+   recommendation until its scoped-view rerun is available.
 
 ## Reproduce
 

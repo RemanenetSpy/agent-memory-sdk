@@ -93,6 +93,7 @@ python examples/postgres_backend.py
 pip install "agent-memory-sdk[api]"
 
 # Terminal 1 — start the server
+export AGENT_MEMORY_API_KEY="replace-with-a-long-random-secret"
 AGENT_MEMORY_DIR=.agent_memory agent-memory-api
 
 # Terminal 2 — run the client example

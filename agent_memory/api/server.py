@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -11,8 +12,8 @@ from pydantic import BaseModel, Field
 from agent_memory.models import MemoryAction
 
 try:
-    from fastapi import FastAPI, HTTPException, Query
-    from fastapi.responses import HTMLResponse
+    from fastapi import FastAPI, HTTPException, Query, Request
+    from fastapi.responses import HTMLResponse, JSONResponse
 
     FASTAPI_AVAILABLE = True
 except ImportError:
@@ -55,6 +56,8 @@ def create_app(
     collection_name: str = "agent_memories",
     backend: str = "sqlite",
     memory: Any | None = None,
+    api_key: str | None = None,
+    allow_unauthenticated: bool = False,
     **memory_kwargs: Any,
 ) -> Any:
     """Create and return a FastAPI application backed by a Memory instance.
@@ -68,6 +71,18 @@ def create_app(
         raise ImportError(
             "FastAPI server requires fastapi and uvicorn. "
             "Install with: pip install agent-memory-sdk[api]"
+        )
+
+    resolved_api_key = (
+        api_key if api_key is not None else os.environ.get("AGENT_MEMORY_API_KEY")
+    )
+    if resolved_api_key is not None and not resolved_api_key.strip():
+        raise ValueError("api_key must not be empty")
+    if resolved_api_key is None and not allow_unauthenticated:
+        raise ValueError(
+            "REST API authentication is required. Pass api_key, set "
+            "AGENT_MEMORY_API_KEY, or explicitly set allow_unauthenticated=True "
+            "for a trusted local development environment."
         )
 
     from agent_memory.manager import Memory
@@ -98,6 +113,24 @@ def create_app(
         version="0.2.0",
         lifespan=lifespan,
     )
+
+    if resolved_api_key is not None:
+
+        @app.middleware("http")
+        async def require_api_key(request: Request, call_next: Any) -> Any:
+            supplied = request.headers.get("x-api-key", "")
+            authorization = request.headers.get("authorization", "")
+            if not supplied and authorization.lower().startswith("bearer "):
+                supplied = authorization[7:].strip()
+            if not hmac.compare_digest(
+                supplied.encode("utf-8"), resolved_api_key.encode("utf-8")
+            ):
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid or missing API key"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return await call_next(request)
 
     def _mem() -> Memory:
         mem: Memory | None = _state.get("memory")  # type: ignore[assignment]
@@ -236,10 +269,11 @@ def main() -> None:
             "AGENT_MEMORY_COLLECTION", "agent_memories"
         ),
         backend=os.environ.get("AGENT_MEMORY_BACKEND", "sqlite"),
+        api_key=os.environ.get("AGENT_MEMORY_API_KEY"),
     )
     uvicorn.run(
         app,
-        host=os.environ.get("HOST", "0.0.0.0"),
+        host=os.environ.get("HOST", "127.0.0.1"),
         port=int(os.environ.get("PORT", "8000")),
     )
 

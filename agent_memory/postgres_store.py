@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from agent_memory.models import MemoryEntry, MemoryScope, MemoryState, MemoryType
@@ -39,6 +40,10 @@ class PostgresMemoryStore(MemoryStore):
         self._psycopg2 = psycopg2
         self._extras = psycopg2.extras
         self._dsn = dsn
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,44}", table_name):
+            raise ValueError(
+                "table_name must be a simple SQL identifier of at most 45 characters"
+            )
         self._table = table_name
         self._embedder: Any | None = None
         self._vec_dim = 0

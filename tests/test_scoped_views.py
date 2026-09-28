@@ -175,6 +175,16 @@ def test_caller_metadata_is_preserved(memory: Memory) -> None:
     assert entry.metadata["user_id"] == "alice"
 
 
+def test_user_view_cannot_promote_write_to_shared(memory: Memory) -> None:
+    entry = memory.scoped(user_id="alice").remember(
+        "Private question", "Private answer", metadata={"shared": True}
+    )
+
+    assert entry.metadata == {"user_id": "alice"}
+    assert memory.scoped(user_id="bob").resolve("Private question").action == MemoryAction.NONE
+    assert memory.scoped(shared=True).resolve("Private question").action == MemoryAction.NONE
+
+
 def test_extracted_memories_carry_the_view_identity(memory: Memory) -> None:
     entries = memory.scoped(user_id="alice", session_id="s1").from_conversation(
         "My home address is 44 Brunswick Road, Leeds.", "Saved your home address."
@@ -246,6 +256,18 @@ def test_a_view_cannot_delete_an_invisible_memory(populated: Memory) -> None:
     assert alice.get(bob_entry.id) is None
     assert alice.forget(bob_entry.id) is False
     assert populated.get(bob_entry.id) is not None
+
+
+def test_user_view_cannot_delete_shared_memory(populated: Memory) -> None:
+    shared_entry = next(
+        entry
+        for entry in populated.list(limit=100)
+        if entry.metadata.get("shared")
+    )
+
+    assert populated.scoped(user_id="alice").get(shared_entry.id) is not None
+    assert populated.scoped(user_id="alice").forget(shared_entry.id) is False
+    assert populated.scoped(shared=True).get(shared_entry.id) is not None
 
 
 def test_a_session_view_cannot_delete_a_sibling_session_memory(populated: Memory) -> None:

@@ -2,7 +2,7 @@
   "schema_version": "1.1",
   "system": {
     "name": "agent-memory-sdk",
-    "version": "0.1.5.dev25+g893abc6bb.d20260922",
+    "version": "0.1.6.dev11+gb5c7b8599.d20260927",
     "deployment": "local"
   },
   "dataset": {
@@ -29,7 +29,7 @@
   },
   "capabilities": {
     "delete_by_id": "supported",
-    "delete_scope": "partial",
+    "delete_scope": "supported",
     "tombstones": "partial",
     "raw_message_store": "none",
     "ttl": "supported",
@@ -56,8 +56,8 @@
       "poisoned_write": {
         "status": "scored",
         "battery_file": "benchmarks/decision_safety/poisoned_write.v1.json",
-        "injection_write_rate": 1.0,
-        "injection_replay_rate": 0.4,
+        "injection_write_rate": 0.0,
+        "injection_replay_rate": 0.0,
         "benign_write_rate": 1.0,
         "false_quarantine_rate": 0.0
       },
@@ -86,13 +86,12 @@
     "raw_results": "benchmarks/decision_safety/results/agent_memory.lexical.raw.json"
   },
   "limitations": [
-    "Scope isolation is provided by the harness (one store per battery scope). MemoryEntry.scope is a tier, not a tenant id, so the SDK does not isolate tenants inside one store.",
-    "delete_scope emulated with forget_where(all=True) against that scope's own store; forget_where() filters on tier/tags/metadata, not on a tenant identity.",
+    "One Memory store is shared by all scopes in a battery; each scope maps to a MemoryView user_id and is filtered by the SDK's scoped-view architecture.",
     "advance_clock emulated by back-dating stored timestamps, then calling cleanup() to reconcile stored state; TTL itself is enforced on the read path.",
     "Ingest path: extract (Memory.from_conversation, the path that decides what to store)",
     "Retrieval: lexical/BM25 only (embeddings disabled for determinism); near-tie behaviour under vector similarity is untested in this run",
     "Decision thresholds: replay=0.85, restore=0.7, verify=0.8. These gate abstention, so they move every paired metric here.",
-    "Emulated ops (harness worked around a missing API): advance_clock, delete_scope",
+    "Emulated ops (harness worked around a missing API): advance_clock",
     "Batteries reported unsupported rather than scored: point_in_time"
   ]
 }
