@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+from collections.abc import Callable
 from pathlib import Path
 
+from agent_memory.confidence import ConfidenceEvent, ConfidenceLearner
 from agent_memory.decision import DecisionEngine
 from agent_memory.entity_extractor import EntityExtractor, ExtractedMemory
 from agent_memory.exceptions import ConfigurationError
 from agent_memory.logging_config import get_logger
-from agent_memory.models import MemoryDecision, MemoryEntry, MemoryScope, MemoryType
+from agent_memory.models import MemoryAction, MemoryDecision, MemoryEntry, MemoryScope, MemoryType
 from agent_memory.policy import DecisionPolicy, DefaultPolicy
 from agent_memory.retriever import MemoryRetriever
+from agent_memory.scoped import MemoryView
 from agent_memory.sqlite_store import SqliteMemoryStore
 from agent_memory.store import ChromaDBStore, MemoryStore
 from agent_memory.ttl import parse_ttl
@@ -33,6 +36,7 @@ class Memory:
         embedder: object | None = None,
         enable_embeddings: bool | str = "auto",
         store: MemoryStore | None = None,
+        graph_weight: float = 0.0,
         **backend_kwargs: object,
     ) -> None:
         if store is not None:
@@ -61,7 +65,23 @@ class Memory:
                 "Choices: 'sqlite', 'chromadb', 'redis', 'postgres'"
             )
         log.info("Memory initialised  backend=%s", backend)
-        self._policy = policy or DefaultPolicy()
+        import warnings as _warnings
+        if not 0.0 <= graph_weight <= 1.0:
+            _warnings.warn(
+                f"graph_weight={graph_weight!r} is outside [0, 1]. "
+                "Values outside this range may produce unexpected scoring.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if policy is not None and graph_weight != 0.0:
+            _warnings.warn(
+                "graph_weight is ignored when a custom policy is provided. "
+                "Set graph_weight directly on your policy instance.",
+                UserWarning,
+                stacklevel=2,
+            )
+        self._policy = policy or DefaultPolicy(graph_weight=graph_weight)
+        self._learner = ConfidenceLearner()
         self.retriever = MemoryRetriever(self.store, policy=self._policy)
         self.decision_engine = DecisionEngine(
             self.retriever,
@@ -142,7 +162,15 @@ class Memory:
         top_k: int = 3,
         scope: list[MemoryScope | str] | None = None,
         enable_verify: bool = True,
+        where: Callable[[MemoryEntry], bool] | None = None,
     ) -> MemoryDecision:
+        """Decide what to do with memory for *query*.
+
+        *where* restricts which stored memories may be considered, applied
+        before scoring. Callers that can only see part of the store — one tenant,
+        one agent, one session — must pass it, because ``scope`` is a tier
+        (``user``/``project``/...), not a tenant identifier.
+        """
         scopes = None
         if scope:
             scopes = [MemoryScope(s) if isinstance(s, str) else s for s in scope]
@@ -152,6 +180,7 @@ class Memory:
             top_k=top_k,
             scopes=scopes,
             enable_verify=enable_verify,
+            where=where,
         )
 
     async def aresolve(
@@ -229,13 +258,110 @@ class Memory:
         """Async version of forget()."""
         return await asyncio.to_thread(self.forget, memory_id)
 
+    def forget_where(
+        self,
+        *,
+        scope: builtins.list[MemoryScope | str] | None = None,
+        type: MemoryType | str | None = None,
+        tags: builtins.list[str] | None = None,
+        metadata: dict | None = None,
+        where: Callable[[MemoryEntry], bool] | None = None,
+        all: bool = False,
+        limit: int = 100_000,
+    ) -> int:
+        """Bulk-delete every memory matching *all* of the given criteria.
+
+        Returns the number of memories deleted. Archived and expired memories
+        are included: "forget this" must not leave a copy behind in another
+        state.
+
+        *tags* matches entries carrying every listed tag; *metadata* matches
+        entries whose metadata contains every given key/value pair. Pass
+        ``all=True`` to delete everything in the store — required explicitly,
+        so an empty filter cannot wipe a store by accident.
+
+        Usage::
+
+            memory.forget_where(metadata={"user_id": "alice"})
+            memory.forget_where(scope=["session"])
+            memory.forget_where(all=True)
+        """
+        criteria = (scope, type, tags, metadata, where)
+        if not any(value is not None for value in criteria) and not all:
+            raise ValueError(
+                "forget_where() needs at least one of scope/type/tags/metadata/where, "
+                "or all=True to delete every memory in the store."
+            )
+
+        scopes = [MemoryScope(s) if isinstance(s, str) else s for s in scope] if scope else None
+        memory_type = MemoryType(type) if isinstance(type, str) else type
+
+        entries = self.store.list_all(
+            limit=limit,
+            scopes=scopes,
+            include_archived=True,
+            include_expired=True,
+            memory_type=memory_type,
+        )
+
+        deleted = 0
+        for entry in entries:
+            if tags and not set(tags).issubset(entry.tags):
+                continue
+            if metadata and any(entry.metadata.get(k) != v for k, v in metadata.items()):
+                continue
+            if where is not None and not where(entry):
+                continue
+            deleted += int(self.store.delete(entry.id))
+
+        if deleted:
+            self.retriever.invalidate_cache()
+        log.debug("forget_where  deleted=%d  of=%d", deleted, len(entries))
+        return deleted
+
+    async def aforget_where(self, **kwargs: object) -> int:
+        """Async version of forget_where()."""
+        return await asyncio.to_thread(lambda: self.forget_where(**kwargs))  # type: ignore[arg-type]
+
+    def scoped(
+        self,
+        *,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        shared: bool = False,
+        include_unscoped: bool = False,
+    ) -> MemoryView:
+        """Return a per-user or per-session view over this store.
+
+        ``scope`` is a tier (``user``/``project``/...), not a tenant id, so many
+        users in one store need this instead. Reads are hierarchical (session →
+        user → shared) and filtered during retrieval; writes stay in the view's
+        own namespace. See :class:`~agent_memory.scoped.MemoryView`.
+
+        Usage::
+
+            alice = memory.scoped(user_id="alice")
+            alice.session("s3").remember("Which seat?", "Window")
+            alice.resolve("seat preference?")
+            memory.scoped(shared=True).remember("Refund window?", "30 days")
+        """
+        return MemoryView(
+            memory=self,
+            user_id=user_id,
+            session_id=session_id,
+            shared=shared,
+            include_unscoped=include_unscoped,
+        )
+
     def archive(self, memory_id: str) -> MemoryEntry | None:
         entry = self.store.get(memory_id)
         if not entry:
             return None
         entry.archived = True
         entry.refresh_state()
-        return self.store.update(entry)
+        archived = self.store.update(entry)
+        self.retriever.invalidate_cache()
+        return archived
 
     async def aarchive(self, memory_id: str) -> MemoryEntry | None:
         """Async version of archive()."""
@@ -247,7 +373,10 @@ class Memory:
 
         Returns counts: {"expired": N, "deleted": M}
         """
-        return self.store.cleanup_expired(delete=delete)
+        result = self.store.cleanup_expired(delete=delete)
+        if result["expired"] or result["deleted"]:
+            self.retriever.invalidate_cache()
+        return result
 
     async def acleanup(self, *, delete: bool = False) -> dict[str, int]:
         """Async version of cleanup()."""
@@ -357,12 +486,22 @@ class Memory:
         scope: MemoryScope | str = MemoryScope.USER,
         min_confidence: float = 0.75,
         extractor: EntityExtractor | None = None,
+        metadata: dict | None = None,
+        source_trusted: bool = True,
     ) -> builtins.list[MemoryEntry]:
         """Extract and store memories from a single conversation turn.
 
         Automatically identifies facts, preferences, and entities in
         *human* + *assistant* text and calls :meth:`remember` for each.
         Only candidates above *min_confidence* are stored.
+
+        *metadata* is merged into every stored candidate, which is how a
+        :class:`~agent_memory.scoped.MemoryView` stamps tenant identity onto
+        extracted memories.
+
+        Set *source_trusted* to ``False`` for tool output, retrieved documents,
+        or other externally controlled turns. Those turns are never persisted;
+        pattern-based injection detection is only a supplemental defense.
 
         Returns the list of newly stored :class:`~agent_memory.models.MemoryEntry` objects.
 
@@ -373,6 +512,8 @@ class Memory:
                 assistant="Got it!",
             )
         """
+        if not source_trusted:
+            return []
         mem_scope = MemoryScope(scope) if isinstance(scope, str) else scope
         ext = extractor or EntityExtractor()
         candidates: builtins.list[ExtractedMemory] = ext.extract_from_turn(
@@ -381,6 +522,8 @@ class Memory:
         stored: builtins.list[MemoryEntry] = []
         log.debug("from_conversation  candidates=%d  min_conf=%.2f", len(candidates), min_confidence)
         for c in candidates:
+            if "injection-suspected" in c.tags:
+                continue
             if c.confidence < min_confidence:
                 continue
             entry = self.remember(
@@ -391,7 +534,7 @@ class Memory:
                 tags=c.tags,
                 confidence=c.confidence,
                 requires_verification=c.requires_verification,
-                metadata=c.metadata,
+                metadata={**(c.metadata or {}), **(metadata or {})},
             )
             stored.append(entry)
         return stored
@@ -404,6 +547,8 @@ class Memory:
         scope: MemoryScope | str = MemoryScope.USER,
         min_confidence: float = 0.75,
         extractor: EntityExtractor | None = None,
+        metadata: dict | None = None,
+        source_trusted: bool = True,
     ) -> builtins.list[MemoryEntry]:
         """Async version of :meth:`from_conversation`."""
         return await asyncio.to_thread(
@@ -413,6 +558,8 @@ class Memory:
             scope=scope,
             min_confidence=min_confidence,
             extractor=extractor,
+            metadata=metadata,
+            source_trusted=source_trusted,
         )
 
     # ------------------------------------------------------------------
@@ -471,6 +618,209 @@ class Memory:
         from agent_memory.knowledge_graph import GraphBuilder  # noqa: PLC0415
 
         return GraphBuilder().build(self.store)
+
+    # ------------------------------------------------------------------
+    # Feedback — close the confidence learning loop
+    # ------------------------------------------------------------------
+
+    def mark_correct(self, decision: MemoryDecision) -> MemoryEntry | None:
+        """Signal that a REPLAY or RESTORE decision was correct.
+
+        Boosts the matched memory's confidence score (+0.15) and persists the
+        update.  The retriever cache is invalidated so the next resolve() sees
+        the fresh score.
+
+        Returns the updated entry, or None if the decision has no memory.
+        """
+        entry = decision.memory or (decision.context[0].entry if decision.context else None)
+        if entry is None:
+            return None
+        # Work on a copy so the original decision.memory is not mutated if
+        # store.update() fails (e.g. disk full, DB locked).
+        candidate = entry.model_copy()
+        self._learner.record_event(candidate, ConfidenceEvent.USER_CONFIRMED, persist_timestamp=True)
+        updated = self.store.update(candidate)
+        self.retriever.invalidate_cache()
+        log.debug("mark_correct  id=%s  conf=%.2f", updated.id[:8], updated.confidence)
+        return updated
+
+    async def amark_correct(self, decision: MemoryDecision) -> MemoryEntry | None:
+        """Async version of mark_correct()."""
+        return await asyncio.to_thread(self.mark_correct, decision)
+
+    def mark_wrong(self, decision: MemoryDecision) -> MemoryEntry | None:
+        """Signal that a REPLAY or RESTORE decision was wrong.
+
+        Penalises the matched memory's confidence score (−0.25) and persists
+        the update.  The retriever cache is invalidated so the penalised entry
+        is less likely to surface on the next resolve().
+
+        Returns the updated entry, or None if the decision has no memory.
+        """
+        entry = decision.memory or (decision.context[0].entry if decision.context else None)
+        if entry is None:
+            return None
+        candidate = entry.model_copy()
+        self._learner.record_event(candidate, ConfidenceEvent.USER_REJECTED, persist_timestamp=True)
+        updated = self.store.update(candidate)
+        self.retriever.invalidate_cache()
+        log.debug("mark_wrong  id=%s  conf=%.2f", updated.id[:8], updated.confidence)
+        return updated
+
+    async def amark_wrong(self, decision: MemoryDecision) -> MemoryEntry | None:
+        """Async version of mark_wrong()."""
+        return await asyncio.to_thread(self.mark_wrong, decision)
+
+    # ------------------------------------------------------------------
+    # Verify — complete the VERIFY decision cycle
+    # ------------------------------------------------------------------
+
+    def _apply_verification(
+        self,
+        entry: MemoryEntry,
+        is_valid: bool,
+        decision: MemoryDecision,
+    ) -> MemoryDecision:
+        """Shared result-builder for both sync and async verify paths.
+
+        Applies the confidence event, persists the entry, invalidates the
+        cache, and returns the resolved MemoryDecision.  Keeping this in one
+        place ensures both paths stay in sync for future changes.
+        """
+        # Work on a copy so the caller's entry is not mutated if store.update() fails.
+        candidate = entry.model_copy()
+        event = ConfidenceEvent.VERIFIED_CORRECT if is_valid else ConfidenceEvent.VERIFIED_INCORRECT
+        self._learner.record_event(candidate, event, persist_timestamp=True)
+        updated = self.store.update(candidate)
+        self.retriever.invalidate_cache()
+        if is_valid:
+            log.debug("verify correct  id=%s  conf=%.2f", updated.id[:8], updated.confidence)
+            return MemoryDecision(
+                action=MemoryAction.REPLAY,
+                query=decision.query,
+                confidence=decision.confidence,
+                response=updated.response,
+                memory=updated,
+                context=decision.context,
+                reason="Verified correct — replaying stored response.",
+            )
+        log.debug("verify failed  id=%s  conf=%.2f", updated.id[:8], updated.confidence)
+        return MemoryDecision(
+            action=MemoryAction.NONE,
+            query=decision.query,
+            confidence=0.0,
+            memory=updated,   # expose the penalised entry so callers can inspect it
+            reason="Verification failed — memory is outdated or incorrect.",
+        )
+
+    def verify(
+        self,
+        decision: MemoryDecision,
+        verifier: builtins.object,
+    ) -> MemoryDecision:
+        """Run *verifier* on a VERIFY decision and return a resolved decision.
+
+        *verifier* is any callable with signature ``(MemoryDecision) -> bool``.
+        Return ``True`` if the memory is still valid, ``False`` if it is stale
+        or wrong.
+
+        On success  → updates confidence (+0.10), returns REPLAY decision.
+        On failure  → updates confidence (−0.20), returns NONE decision with
+                      ``memory`` set so callers can inspect the updated entry.
+
+        The entry is persisted and the retriever cache is invalidated in both
+        cases so confidence changes affect future resolve() calls immediately.
+
+        Example::
+
+            def my_verifier(decision):
+                # Call your LLM / tool / API here
+                return check_still_true(decision.memory.response)
+
+            resolved = memory.verify(decision, my_verifier)
+            if resolved.action == MemoryAction.REPLAY:
+                return resolved.response
+        """
+        if decision.action != MemoryAction.VERIFY or decision.memory is None:
+            return decision
+        is_valid: bool = verifier(decision)  # type: ignore[operator]
+        return self._apply_verification(decision.memory, is_valid, decision)
+
+    async def averify(
+        self,
+        decision: MemoryDecision,
+        verifier: builtins.object,
+    ) -> MemoryDecision:
+        """Async version of verify().
+
+        If *verifier* is a coroutine function it is awaited directly; otherwise
+        it is run in a thread so blocking verifiers don't stall the event loop.
+        """
+        if decision.action != MemoryAction.VERIFY or decision.memory is None:
+            return decision
+
+        import inspect
+        if inspect.iscoroutinefunction(verifier):
+            # Snapshot the entry before awaiting — a concurrent mark_correct/wrong
+            # call could mutate decision.memory.confidence between the await and
+            # _apply_verification running in a thread.
+            entry_snapshot = decision.memory.model_copy()
+            is_valid: bool = await verifier(decision)  # type: ignore[operator]
+            return await asyncio.to_thread(
+                self._apply_verification, entry_snapshot, is_valid, decision
+            )
+        return await asyncio.to_thread(self.verify, decision, verifier)
+
+    # ------------------------------------------------------------------
+    # Graph importance — wire PageRank into scoring
+    # ------------------------------------------------------------------
+
+    def refresh_graph_scores(self) -> int:
+        """Build the memory relationship graph and update importance scores.
+
+        Computes PageRank-style importance for every active memory based on
+        similarity edges and tag overlap.  Scores are normalised to [0, 1] and
+        injected into the policy so subsequent resolve() calls incorporate graph
+        connectivity.  The effect is gated by ``graph_weight`` (set at
+        ``Memory.__init__``); the default is 0.0 so calling this without a
+        non-zero ``graph_weight`` has no effect on decisions.
+
+        Returns the number of memories scored.  Call this after bulk imports
+        or whenever the graph topology changes significantly.
+
+        Example::
+
+            memory = Memory(graph_weight=0.10)
+            memory.remember(...)
+            memory.refresh_graph_scores()   # now resolve() uses graph boost
+        """
+        from agent_memory.graph import MemoryGraph
+
+        graph = MemoryGraph.build(self.store)
+        scores = graph.importance_scores()
+        if scores:
+            max_score = max(scores.values())
+            if max_score > 0:
+                scores = {k: v / max_score for k, v in scores.items()}
+        if isinstance(self._policy, DefaultPolicy):
+            self._policy.update_graph_scores(scores)
+            log.debug("refresh_graph_scores  n=%d  graph_weight=%.2f",
+                      len(scores), self._policy.graph_weight)
+            return len(scores)
+
+        import warnings as _w
+        _w.warn(
+            "refresh_graph_scores() has no effect because the active policy is not "
+            "a DefaultPolicy. Implement update_graph_scores() on your custom policy "
+            "or use DefaultPolicy(graph_weight=...).",
+            UserWarning,
+            stacklevel=2,
+        )
+        return 0
+
+    async def arefresh_graph_scores(self) -> int:
+        """Async version of refresh_graph_scores()."""
+        return await asyncio.to_thread(self.refresh_graph_scores)
 
     # ------------------------------------------------------------------
     # Backward compatibility

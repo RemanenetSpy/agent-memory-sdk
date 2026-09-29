@@ -11,7 +11,7 @@ python -m pytest tests/test_scale.py -v                     # correctness at sca
 
 ## Decision quality
 
-The eval suite covers 25 cases across 4 datasets, including **adversarial
+The eval suite covers 36 cases across 4 datasets, including **adversarial
 trap cases** — queries that share a word with a stored memory but ask a
 different question, which naive retrieve-and-inject systems answer wrongly.
 
@@ -20,14 +20,18 @@ different question, which naive retrieve-and-inject systems answer wrongly.
 | `customer_support` | 4 | FAQ replay, paraphrase restore, unrelated → none |
 | `coding_agent` | 4 | Workflow replay/restore, fact verification |
 | `research_agent` | 4 | Summary replay, cross-document restore |
-| `decision_traps` | 13 | Shared-word traps, `requires_verification` facts, paraphrases |
+| `decision_traps` | 24 | Shared-word traps, `requires_verification` facts, paraphrases |
 
-Results (measured 2026-09, v0.2 dev):
+Results (measured 2026-09; the suite has grown to 36 cases):
 
 | Backend | Precision |
 |---|---|
-| SQLite, lexical (FTS5 + BM25 + coverage) | **25/25 (100%)** |
-| SQLite + `semantic` extra (sqlite-vec + fastembed) | **25/25 (100%)** |
+| SQLite + `semantic` extra (sqlite-vec + fastembed) | **34/36 (94.4%)** |
+
+Both misses are shared-word traps that return VERIFY instead of NONE — a
+cautious failure (VERIFY never uses the memory without validation), never a
+wrong REPLAY. External benchmark: see the
+[LongMemEval retrieval report](../benchmarks/longmemeval/REPORT.md).
 
 Scoring: an expected `restore` also accepts `replay`/`verify` (all three
 surface the memory; verify is simply more cautious). The hard boundaries —
@@ -42,17 +46,12 @@ Example trap case that must return `none`:
 
 ## Latency
 
-Measured on an M-series MacBook (single process, local SQLite file).
-CI runners will be slower; `tests/test_scale.py` enforces a generous
-regression bound instead of these exact numbers.
-
-| Configuration | Corpus size | resolve() avg | resolve() p95 |
-|---|---|---|---|
-| SQLite lexical (FTS5) | 5,000 memories | 12 ms | 13 ms |
-| SQLite + semantic (sqlite-vec, 384-dim) | 1,000 memories | 12 ms | 19 ms |
-
-Writes: ~1 ms/memory lexical, ~8 ms/memory with embedding (single-item
-batches; bulk import via the embedder's native batching is faster).
+Latency and write cost depend on corpus shape, query terms, cache state,
+embedding mode, batch size, machine, and operating system. The reproducible
+stress harness records p50/p75/p90/p95/p99 latency, CPU, RSS, and seed rate for
+the exact workload; see [stress-testing](stress-testing.md). CI uses a
+regression bound rather than treating one machine's measurements as a portable
+performance guarantee.
 
 Before v0.2, keyword search loaded up to 10,000 rows and rebuilt a Python
 BM25 index on **every query** — roughly 1s per resolve at 5,000 memories.
@@ -67,8 +66,25 @@ aggregates with no row cap.
 - Token-savings depend entirely on your hit rate and prompt sizes; measure
   them in your own pipeline.
 
+## Competitive benchmark RFC
+
+Before publishing a cross-project comparison, follow the matched-workload,
+reproducibility, and maintainer-review rules in the
+[competitive benchmark RFC](competitive-benchmark-rfc.md). The companion
+[`benchmarks/competitive/`](../benchmarks/competitive/) directory defines the
+result contract and adapter requirements.
+
 ## Roadmap for external benchmarks
 
-Planned: LongMemEval / LoCoMo harness so results are comparable with other
-memory systems (mem0, Zep). Contributions welcome — see
+**Done:** LongMemEval retrieval-proxy harness — `_S` (98.1% Recall@5 semantic)
+and `_M` (87.0% lexical on independent cleaned-release haystacks). It is not an
+end-to-end evaluation or a direct comparison with the paper's original-release
+session-index baselines. Full results:
+[benchmarks/longmemeval/REPORT.md](../benchmarks/longmemeval/REPORT.md).
+
+**Planned:** the end-to-end stage (LLM answering + the benchmark's official
+GPT-4o judge, directly comparable to Zep's published accuracy), LoCoMo (the
+benchmark mem0 publishes on), and a repeated-query decision-layer benchmark
+(cost/latency/wrong-replay curves — the REPLAY/VERIFY value proposition no
+public benchmark covers). Contributions welcome — see
 [CONTRIBUTING.md](../CONTRIBUTING.md).

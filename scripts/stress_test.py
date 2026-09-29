@@ -36,6 +36,11 @@ except ImportError:
 from agent_memory.manager import Memory
 
 _DATA_DIR = Path(__file__).parent.parent / "benchmarks" / "stress"
+_JSON_OUTPUT = False
+
+
+def _progress(message: str) -> None:
+    print(message, file=sys.stderr if _JSON_OUTPUT else sys.stdout, flush=True)
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -102,7 +107,7 @@ def _seed_normal(memory: Memory, n: int, templates: list[dict]) -> float:
                 store.store(b)
             batch.clear()
             if (i + 1) % 10_000 == 0:
-                print(f"  {i+1:,}/{n:,}  ({(i+1)/(time.perf_counter()-t0):.0f}/s)", flush=True)
+                _progress(f"  {i+1:,}/{n:,}  ({(i+1)/(time.perf_counter()-t0):.0f}/s)")
 
     for b in batch:
         store.store(b)
@@ -140,10 +145,10 @@ def _seed_fast(memory: Memory, n: int, templates: list[dict]) -> float:
              0, "active", 0, now_iso, now_iso, None),
         )
         if (i + 1) % 100_000 == 0:
-            print(f"  {i+1:,}/{n:,}  ({(i+1)/(time.perf_counter()-t0):,.0f}/s)", flush=True)
+            _progress(f"  {i+1:,}/{n:,}  ({(i+1)/(time.perf_counter()-t0):,.0f}/s)")
 
     conn.commit()
-    print("  Rebuilding FTS5 …", flush=True)
+    _progress("  Rebuilding FTS5 …")
     conn.execute("DELETE FROM memories_fts")
     conn.execute(
         "INSERT INTO memories_fts(rowid,search_text) "
@@ -202,7 +207,9 @@ def _measure(memory: Memory, n_queries: int, variants: list[str], warm_up: int =
 
 
 def run(n_memories, *, data_dir=None, n_queries=1000, disable_cache=True,
-        fast_seed=False, json_out=False) -> dict:
+    fast_seed=False, json_out=False, enable_embeddings: bool | str = "auto") -> dict:
+    global _JSON_OUTPUT
+    _JSON_OUTPUT = json_out
     templates = _get_templates()
     variants  = _get_queries()
 
@@ -210,7 +217,11 @@ def run(n_memories, *, data_dir=None, n_queries=1000, disable_cache=True,
     dir_path = tmp.name if tmp else data_dir
 
     try:
-        memory = Memory(persist_dir=dir_path, collection_name=f"stress_{n_memories}")
+        memory = Memory(
+            persist_dir=dir_path,
+            collection_name=f"stress_{n_memories}",
+            enable_embeddings=enable_embeddings,
+        )
         if disable_cache:
             memory.retriever._cache._maxsize = 0  # type: ignore[attr-defined]
 
@@ -237,6 +248,9 @@ def run(n_memories, *, data_dir=None, n_queries=1000, disable_cache=True,
         stats = _measure(memory, n_queries, variants)
         result = {
             "n_memories": n_memories, "actual_count": count,
+            "semantic_search_enabled": bool(
+                getattr(memory.store, "semantic_search_enabled", False)
+            ),
             "cache_enabled": not disable_cache, "fast_seed": fast_seed,
             "seed_s": round(seed_t,2), "seed_rate": round(rate,0),
             "seed_cpu_s":      seed_res["cpu_user_s"],
@@ -285,11 +299,19 @@ def main() -> None:
     p.add_argument("--no-cache",  action="store_true", default=True)
     p.add_argument("--cache",     action="store_true", help="Enable LRU cache")
     p.add_argument("--fast-seed", action="store_true", help="Bulk insert (SQLite only)")
+    p.add_argument(
+        "--embeddings",
+        choices=("auto", "on", "off"),
+        default="auto",
+        help="embedding mode: auto (default), on, or off",
+    )
     p.add_argument("--json",      action="store_true")
     args = p.parse_args()
     random.seed(42)
+    embedding_mode: bool | str = {"auto": "auto", "on": True, "off": False}[args.embeddings]
     run(args.memories, data_dir=args.data_dir, n_queries=args.queries,
-        disable_cache=not args.cache, fast_seed=args.fast_seed, json_out=args.json)
+        disable_cache=not args.cache, fast_seed=args.fast_seed, json_out=args.json,
+        enable_embeddings=embedding_mode)
 
 
 if __name__ == "__main__":

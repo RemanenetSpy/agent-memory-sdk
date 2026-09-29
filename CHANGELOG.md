@@ -54,7 +54,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a dedicated semantic-extras job, and an eval job. mypy is clean across the
   codebase.
 
+### Added (multi-tenancy & decision-safety benchmark)
+- **`Memory.scoped(user_id=..., session_id=..., shared=...)`** — per-user and
+  per-session views over one store. `scope` is a tier (`user`/`project`/...), not
+  a tenant id, so many users in one store needed this. Reads are hierarchical
+  (session → user → shared) and filtered **during retrieval, before scoring**;
+  writes stay in the view's own namespace. Memories written directly through
+  `Memory` are invisible to a user view unless `include_unscoped=True`.
+- **`Memory.forget_where(...)`** — bulk delete by scope, type, tags, metadata, or
+  predicate, including archived and expired copies. Requires an explicit filter
+  or `all=True`. `MultiAgentMemory.forget_all()` and `MemoryView.forget_all()`
+  build on it, giving a per-tenant "delete everything for this user".
+- **`Memory.resolve(where=...)`** and `from_conversation(metadata=...)` for
+  callers that can only see part of a store.
+- **Decision Safety Suite v2** (`benchmarks/decision_safety/`): six op-script
+  batteries — deletion durability, TTL expiry, poisoned writes, state
+  invalidation, provenance re-assertion, point-in-time queries — with a runner,
+  an adapter contract, and paired-metric enforcement in the result validator.
+  See `docs/decision-safety-suite.md`.
+
 ### Fixed
+- **Cross-agent memory leak on the decision path**: `MultiAgentMemory.resolve()`
+  ignored the isolation mode, so an `ISOLATED` agent could have another agent's
+  memory replayed to it verbatim while `list()` correctly showed nothing.
+  Isolation is now applied during retrieval, and a filtered candidate list is
+  never cached for another caller.
+- **Expired memories served from the retrieval cache**: a memory whose TTL was
+  shorter than the retriever's 5-second result cache could be replayed after
+  expiry on a repeated query, even though the store's read path filtered it.
 - **Critical scoring bug**: the top BM25 hit was always normalized to a perfect 1.0,
   so any query sharing a single word with a stored memory replayed that memory's
   answer verbatim at confidence 1.0. Keyword scores are now scaled by query-term

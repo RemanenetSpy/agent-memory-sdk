@@ -262,16 +262,37 @@ def seed(data_dir: str = "/tmp/agent_memory_demo") -> Memory:
         expires_at=future,
     ))
 
-    # Bump access counts on frequently-used memories to show usage patterns
-    for mid, count in [
-        (m.store.list_all(limit=1)[0].id if m.store.count else None, 8),
-    ]:
-        if mid:
-            entry = m.store.get(mid)
-            if entry:
-                entry.access_count = count
-                entry.last_accessed_at = datetime.now(timezone.utc)
-                m.store.update(entry)
+    # ── Demo: from_conversation ───────────────────────────────────────────────
+    m.from_conversation(
+        human="I'm a senior engineer and I prefer dark mode and Python.",
+        assistant="Got it — noted your preference for dark mode and Python.",
+        scope=MemoryScope.USER,
+    )
+
+    # ── Demo: mark_correct / mark_wrong feedback loop ─────────────────────────
+    d_correct = m.resolve("How do I reset my password?")
+    if d_correct.action.value != "none":
+        m.mark_correct(d_correct)   # boost confidence on a verified good answer
+
+    d_wrong = m.resolve("What is the enterprise SLA?")
+    if d_wrong.action.value != "none":
+        m.mark_wrong(d_wrong)       # penalise the SLA memory (marked requires_verification)
+
+    # ── Demo: verify() — simulates a tool-check that confirms the answer ──────
+    d_verify = m.resolve("What are the API rate limits?")
+    if d_verify.action.value == "verify":
+        m.verify(d_verify, verifier=lambda d: True)   # simulated check passes
+
+    # ── Demo: graph scores ────────────────────────────────────────────────────
+    m.refresh_graph_scores()   # wires PageRank into scoring (graph_weight=0 by default)
+
+    # ── Bump access counts on frequently-used memories ────────────────────────
+    entries = m.store.list_all(limit=5)
+    for i, entry in enumerate(entries):
+        if entry:
+            entry.access_count = (i + 1) * 3
+            entry.last_accessed_at = datetime.now(timezone.utc)
+            m.store.update(entry)
 
     total = m.store.count
     print(f"✓ Seeded {total} memories into {data_dir}")

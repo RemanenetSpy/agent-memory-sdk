@@ -9,7 +9,7 @@ A high-confidence exact or near-exact match means the stored answer is directly 
 For memories of type `fact`, `workflow`, or `tool_output` when either:
 - Their score falls below `verify_threshold` (default 0.80), or
 - They are older than `recency_half_life_days` (default 30 days), or
-- `requires_verification=True` was set at store time (always VERIFY regardless of score).
+- `requires_verification=True` was set at store time and the candidate clears the restore threshold. Below that threshold, the correct action is NONE.
 
 **Why does NONE fire even though there's a related memory?**
 The composite score (semantic + recency + confidence + usage) is below the restore threshold. This prevents the "shared-word trap" — a memory about payment methods doesn't answer a question about two-factor authentication just because both mention "support".
@@ -25,15 +25,16 @@ By default `restore_threshold=0.70`. Below this, the action is NONE. Raise it to
 Yes. Auto-saving every turn fills the store with low-quality junk. Your application decides what's worth remembering by calling `remember()` after a validated answer.
 
 **How do I stop a fact from replaying stale data?**
-Set `requires_verification=True` at store time. The entry will always return VERIFY, prompting the agent to re-check the answer before reusing it.
+Set `requires_verification=True` at store time. A sufficiently relevant match returns VERIFY instead of REPLAY or RESTORE; a candidate below the restore threshold returns NONE and is not used.
 
 **How do I share memory between multiple processes?**
 Point all processes at the same `persist_dir`. SQLite WAL mode makes concurrent reads safe. The MCP server, CLI, and Python SDK can all share one directory.
 
 **How do I isolate memories between users?**
-Use `scope="user"` when storing and filter by scope when resolving:
+Use a scoped view for per-user isolation. Derive the user ID from authenticated application context; `scope="user"` alone is only a tier label:
 ```python
-decision = memory.resolve(query, scope=["user", "global"])
+alice = memory.scoped(user_id=authenticated_user_id)
+decision = alice.resolve(query)
 ```
 
 ---
@@ -41,16 +42,22 @@ decision = memory.resolve(query, scope=["user", "global"])
 ## Performance
 
 **How fast is `resolve()`?**
-- Cache hit (repeated query): p50 ≈ 0.05ms
-- Cache miss (new query): p95 ≈ 5.8ms at 100k memories, 7.9ms at 1M memories
+
+It depends on the corpus, query terms, cache state, embedding mode, and
+machine. A cache hit measures the in-process cache path; a cache miss measures
+retrieval against the configured store. Run the documented stress harness with
+your workload before setting a latency expectation.
 
 **How does it scale?**
-SQLite FTS5 scales sub-linearly — doubling the memory count adds only ~30% latency at large scales because the index prunes irrelevant entries before scoring. See [stress-testing.md](stress-testing.md) for detailed benchmarks.
+
+For SQLite FTS5, query-term document frequency can matter more than total row
+count. Measure the corpus and query distribution you plan to ship; see
+[stress-testing.md](stress-testing.md) for the reproducible harness.
 
 **When should I use Redis or Postgres instead of SQLite?**
 - **Redis**: multiple services sharing memory with sub-ms read latency requirements
 - **Postgres**: production deployment with existing SQL infrastructure and SQL-native aggregates
-- **SQLite**: the right default for 99% of use cases; handles millions of entries comfortably
+- **SQLite**: a zero-setup local default; validate its behavior against your workload and deployment needs
 
 ---
 

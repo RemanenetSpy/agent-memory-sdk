@@ -10,6 +10,9 @@ on:
 env:
   PYPI_PACKAGE_NAME: agent-memory-sdk
 
+# Deny all permissions by default; each job grants only what it needs.
+permissions: {}
+
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
   # Gate: run the full test matrix before touching PyPI
@@ -17,6 +20,8 @@ jobs:
   test:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: true          # abort remaining matrix legs on first failure
       matrix:
@@ -55,6 +60,8 @@ jobs:
     name: Test optional extras
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4

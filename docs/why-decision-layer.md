@@ -72,10 +72,11 @@ pipelines.
 The eval suite includes the trap cases above. Current results, reproducible
 with `agent-memory eval` from the repo:
 
-- **25/25 decision-quality cases** on both backends (lexical SQLite, and
-  SQLite with sqlite-vec embeddings)
-- **~12ms** per `resolve()` at 5,000 memories (FTS5 index, local file, no
-  server)
+- **34/36 decision-quality cases** (the suite has grown; both misses return
+  VERIFY — cautious, never a wrong REPLAY)
+- Workload-dependent local retrieval latency with no network round-trip; use
+  the reproducible [stress-test benchmark](stress-testing.md) to measure your
+  corpus and query mix
 - Everything local: SQLite + optional ONNX MiniLM. No API keys, no torch.
 
 We deliberately don't publish a "99% faster than an LLM call" number

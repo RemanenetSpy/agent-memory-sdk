@@ -12,6 +12,8 @@ and also how to embed the server inside your own FastAPI app.
 """
 from __future__ import annotations
 
+import os
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PART A — Calling the REST API with httpx (server must already be running)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -20,7 +22,11 @@ try:
 
     BASE = "http://localhost:8000"
 
-    with httpx.Client(base_url=BASE, timeout=10) as client:
+    with httpx.Client(
+        base_url=BASE,
+        timeout=10,
+        headers={"X-API-Key": os.environ.get("AGENT_MEMORY_API_KEY", "")},
+    ) as client:
 
         # Store a memory
         resp = client.post("/memories", json={
@@ -73,6 +79,7 @@ try:
     memory_app = create_app(
         persist_dir=".agent_memory",
         backend="sqlite",
+        api_key=os.environ.get("AGENT_MEMORY_API_KEY"),
     )
 
     main_app.mount("/memory", memory_app)

@@ -1,0 +1,29 @@
+{
+  "name": "point_in_time",
+  "version": 1,
+  "description": "Replaying a past session: a query with as_of: T must reconstruct the facts valid at T with no leakage of later updates, and must be deterministic across repeats. Capability-gated — systems without a first-class point-in-time read path are reported unsupported rather than scored, and the harness must not emulate as_of with a created_at filter of its own.",
+  "spec": "../../docs/decision-safety-suite.md",
+  "requires_capabilities": ["as_of_query"],
+  "optional_capabilities": ["explicit_supersession"],
+  "ops": [
+    {"op": "write", "id": "t1", "at": "2026-01-10T09:00:00Z", "scope": "project:atlas", "human": "The Atlas launch date is 3 March.", "assistant": "Noted: launch 3 March.", "expect_write": true},
+    {"op": "write", "id": "t2", "at": "2026-01-10T09:05:00Z", "scope": "project:atlas", "human": "Pricing is $29/month.", "assistant": "Recorded $29/month.", "expect_write": true},
+    {"op": "write", "id": "t3", "at": "2026-02-01T11:00:00Z", "scope": "project:atlas", "human": "Launch slipped to 17 April.", "assistant": "Updated: launch 17 April.", "expect_write": true, "mutates": "t1"},
+    {"op": "write", "id": "t4", "at": "2026-02-20T16:30:00Z", "scope": "project:atlas", "human": "Pricing changed to $39/month.", "assistant": "Updated to $39/month.", "expect_write": true, "mutates": "t2"},
+    {"op": "write", "id": "t5", "at": "2026-03-15T10:00:00Z", "scope": "project:atlas", "human": "Launch moved again, 2 May.", "assistant": "Updated: launch 2 May.", "expect_write": true, "mutates": "t3"},
+
+    {"op": "query", "id": "q1", "scope": "project:atlas", "text": "When does Atlas launch?", "assert": {"expect_state": "2 May", "forbidden_state": "3 March", "must_contain": ["2 May"], "must_not_contain": ["3 March", "17 April"], "notes": "Live query with no as_of: current state only."}},
+
+    {"op": "query_as_of", "id": "p1", "scope": "project:atlas", "as_of": "2026-01-15T00:00:00Z", "text": "When does Atlas launch?", "assert": {"expect_state": "3 March", "must_contain": ["3 March"], "must_not_contain": ["17 April", "2 May"]}},
+    {"op": "query_as_of", "id": "p2", "scope": "project:atlas", "as_of": "2026-01-15T00:00:00Z", "text": "What is the pricing?", "assert": {"expect_state": "$29", "must_contain": ["29"], "must_not_contain": ["39"]}},
+    {"op": "query_as_of", "id": "p3", "scope": "project:atlas", "as_of": "2026-02-10T00:00:00Z", "text": "When does Atlas launch?", "assert": {"expect_state": "17 April", "must_contain": ["17 April"], "must_not_contain": ["3 March", "2 May"], "notes": "Between the first and second launch mutation."}},
+    {"op": "query_as_of", "id": "p4", "scope": "project:atlas", "as_of": "2026-02-10T00:00:00Z", "text": "What is the pricing?", "assert": {"expect_state": "$29", "must_contain": ["29"], "must_not_contain": ["39"], "notes": "Two attributes with different mutation times: as_of must not mix epochs."}},
+    {"op": "query_as_of", "id": "p5", "scope": "project:atlas", "as_of": "2026-03-01T00:00:00Z", "text": "What is the pricing?", "assert": {"expect_state": "$39", "must_contain": ["39"], "must_not_contain": ["29"]}},
+    {"op": "query_as_of", "id": "p6", "scope": "project:atlas", "as_of": "2026-01-10T09:02:00Z", "text": "What is the pricing?", "assert": {"expect_abstain": true, "must_not_contain": ["29", "39"], "notes": "T falls between two writes: the fact did not exist yet. Abstention is the correct answer."}},
+    {"op": "query_as_of", "id": "p7", "scope": "project:atlas", "as_of": "2025-12-01T00:00:00Z", "text": "When does Atlas launch?", "assert": {"expect_abstain": true, "must_not_contain": ["3 March", "17 April", "2 May"], "notes": "T precedes the whole corpus."}},
+
+    {"op": "query_as_of", "id": "p8", "scope": "project:atlas", "as_of": "2026-02-10T00:00:00Z", "text": "When does Atlas launch?", "repeat": 3, "assert": {"expect_state": "17 April", "must_contain": ["17 April"], "must_not_contain": ["3 March", "2 May"], "deterministic": true, "notes": "Same query as p3, repeated: scores as_of_determinism."}},
+
+    {"op": "query", "id": "q2", "scope": "project:atlas", "text": "What is the pricing?", "assert": {"expect_state": "$39", "must_contain": ["39"], "must_not_contain": ["29"], "notes": "Paired control: the as_of block must not have left the live view pinned to a past epoch."}}
+  ]
+}

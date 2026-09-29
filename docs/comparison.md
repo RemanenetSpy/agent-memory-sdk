@@ -1,17 +1,49 @@
 # How agent-memory-sdk compares
 
+## The landscape (September 2026)
+
+Agent memory is a validated, crowded category. Star counts as of 2026-09-23:
+
+| Project | Stars | Category | Read-time decision layer? |
+|---|---|---|---|
+| [Mem0](https://github.com/mem0ai/mem0) | ~65.9k | Memory layer (cloud-first) | ❌ — LLM decides ADD/UPDATE/DELETE at *write* time; retrieval is search-and-inject |
+| [Graphiti / Zep](https://github.com/getzep/graphiti) | ~31.1k | Temporal knowledge graph | ❌ — temporal fact invalidation, but no replay/inject/skip decision |
+| [Cognee](https://github.com/topoteretes/cognee) | ~30.9k | Knowledge-graph memory | ❌ |
+| [Supermemory](https://github.com/supermemoryai/supermemory) | ~30.8k | Memory API | ❌ |
+| [Letta (MemGPT)](https://github.com/letta-ai/letta) | ~24.9k | Stateful agent platform | ⚠️ — agent self-manages tiers via LLM tool calls |
+| [GPTCache](https://github.com/zilliztech/GPTCache) | ~8.2k | Semantic cache | ⚠️ — replay only; no inject/verify/skip graduation |
+| [LangMem](https://github.com/langchain-ai/langmem) | ~1.7k | LangGraph memory utils | ❌ |
+
+Two observations from this table:
+
+1. **The problem is validated** — five projects above 24k stars all exist to stop agents
+   from losing or mismanaging context.
+2. **The read-side decision layer is an open gap.** Semantic caches do REPLAY only.
+   Memory layers do RESTORE only (unconditionally). Nobody graduates between them, and
+   nobody has VERIFY. Getting all four actions today means wiring GPTCache + Mem0 +
+   custom staleness logic yourself.
+
 ## Feature matrix
+
+**How to read this table.** Cells about other projects describe *capabilities*
+checked against that project's own source or docs, dated below — not measured
+behaviour. Where we have not run the system ourselves, the cell says
+`❔ not measured` rather than `❌`; an absent feature and an untested one are
+different claims. Capability checks for this revision were made on 2026-09-27
+(mem0 against `mem0/memory/main.py` on `main`). Corrections from maintainers are
+welcome and will be applied — see the
+[benchmark RFC](competitive-benchmark-rfc.md) for the review process.
 
 | Dimension | Redis (raw) | mem0 | Zep | LangMem | LlamaIndex memory | ChromaDB / Pinecone | MemGPT / Letta | **agent-memory-sdk** |
 |-----------|-------------|------|-----|---------|-------------------|---------------------|----------------|----------------------|
 | **Core model** | Key-value; no memory schema | Entity extraction + vector store; user/session hierarchy | Conversation turns + entity graph + vector search | Message history + LLM-driven summary/extraction | Chat buffer or LLM-summarised window | Embedding vectors; chunk-level similarity | Paged context: main + archival + recall tiers | query→response experience pairs; typed + scoped |
 | **Decision intelligence** | ❌ None — caller decides everything | ❌ None — always retrieves; caller decides | ❌ None — inject is caller's job | ⚠️ Partial — LLM decides what to compress | ❌ None — returns window contents | ❌ None — nearest neighbours regardless of relevance | ⚠️ Partial — LLM function calls move data between tiers | ✅ Explicit: REPLAY / RESTORE / VERIFY / NONE with scored rationale |
 | **Explainability** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ `decision.explain()` → per-component scores + reason tags |
-| **Trap-query protection** | ❌ | ❌ shared-word false positives | ❌ | ❌ | ❌ | ❌ | ⚠️ LLM judgment | ✅ 25/25 adversarial trap cases; NONE fires correctly on weak matches |
-| **Local / offline** | ✅ self-hosted | ❌ cloud-first | ⚠️ open-source but needs server + OpenAI | ⚠️ needs LLM provider | ⚠️ needs LLM provider | ✅ self-hostable | ⚠️ heavy; LLM call per op | ✅ SQLite + ONNX MiniLM, zero API keys, ~12ms/resolve |
+| **Trap-query protection** | ❔ not measured | ❔ not measured | ❔ not measured | ❔ not measured | ❔ not measured | ❔ not measured | ❔ not measured | ✅ 34/36 adversarial trap cases; misses fail safe to VERIFY, never wrong REPLAY |
+| **Local / offline** | ✅ self-hosted | ⚠️ self-hostable (local vector store + local LLM); cloud is the documented default | ⚠️ open-source but needs server + OpenAI | ⚠️ needs LLM provider | ⚠️ needs LLM provider | ✅ self-hostable | ⚠️ heavy; LLM call per op | ✅ SQLite + ONNX MiniLM, zero API keys; workload-specific latency |
 | **Confidence / trust model** | ❌ | ❌ | ❌ | ❌ | ❌ | Cosine only | ❌ | ✅ per-entry confidence; event-driven updates; half-life decay |
-| **Verification semantics** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ `requires_verification=True` → always VERIFY, never silent replay |
-| **TTL / expiry** | ✅ native | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ any entry; `ttl="30d"` / `ttl=3600` |
+| **Verification semantics** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ `requires_verification=True` → VERIFY for relevant matches; low-scoring matches return NONE |
+| **TTL / expiry** | ✅ native | ✅ `expiration_date` (day granularity; expired memories hidden) | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ any entry, second granularity; `ttl="30d"` / `ttl=3600` |
 | **Multi-agent isolation** | Manual prefix | User/agent hierarchy | Session-scoped | ❌ | ❌ | Manual collection | ❌ | ✅ NAMESPACED / ISOLATED / SHARED; broadcast; transfer |
 | **Memory graph** | ❌ | Internal entity graph | ✅ entity + knowledge graph | ❌ | ❌ | ❌ | ❌ | ✅ similarity + tag edges; BFS; clusters; PageRank |
 | **Entity extraction** | ❌ | ✅ auto from conversation | ✅ auto from conversation | ⚠️ LLM-dependent | ❌ | ❌ | ✅ | ✅ `memory.from_conversation(human, assistant)` auto-extracts facts, preferences, entities |
@@ -38,11 +70,11 @@ agent-memory-sdk       → NONE  confidence=0.61  reason: "below restore thresho
 ### 2. Full explainability
 `decision.explain()` returns semantic score, recency score, confidence score, usage score, and the final policy-weighted total — for every query, every time. No other tool in this list exposes this.
 
-### 3. Offline-first with sub-15ms latency
-Zero API keys. SQLite + FTS5 runs in-process; the optional ONNX embedding model loads locally. MemGPT/Letta makes an LLM API call per memory operation. mem0 and Zep default to cloud. agent-memory-sdk benchmarks at ~12ms at 5,000 memories on commodity hardware.
+### 3. Offline-first with locally measured latency
+Zero API keys. SQLite + FTS5 runs in-process; the optional ONNX embedding model loads locally. MemGPT/Letta makes an LLM API call per memory operation. mem0 and Zep default to cloud. Benchmark latency against your corpus using the documented harness.
 
 ### 4. Verification semantics
-Facts, workflows, and tool outputs can be flagged `requires_verification=True`. They always return VERIFY — never silently replayed — so stale rate limits, prices, or policies are never served verbatim without validation. No other tool has this concept.
+Facts, workflows, and tool outputs use verification rules when they are stale or fall below the verification threshold. An explicit `requires_verification=True` routes a sufficiently relevant match to VERIFY rather than replay; a candidate below the restore threshold returns NONE. No other tool has this concept.
 
 ### 5. Automatic entity extraction from conversation
 `memory.from_conversation(human, assistant)` runs regex + optional spaCy NER over a raw conversation turn and auto-stores facts, preferences, and named entities — no manual `remember()` needed.
@@ -91,6 +123,12 @@ Confidence is a first-class field that is updated via feedback events (`VERIFIED
 ### No hosted multi-tenant API
 mem0 and Zep offer managed cloud APIs with auth, multi-tenancy, and dashboards. agent-memory-sdk has a FastAPI server and Streamlit dashboard, but no built-in auth layer for a public-facing deployment.
 
+### No published head-to-head accuracy benchmark yet
+mem0 and Zep publish LOCOMO / LongMemEval *end-to-end accuracy* (LLM answering + LLM judge). We publish a LongMemEval **retrieval proxy** on independent cleaned-release haystacks ([report](../benchmarks/longmemeval/REPORT.md)); it is neither an end-to-end result nor a direct comparison with the paper's original-release session-index baselines.
+
+### Smaller community
+The projects above have 25–65k stars, funded teams, and large contributor bases. This is a focused single-purpose SDK, not a platform.
+
 ---
 
 ## When to choose which
@@ -109,4 +147,4 @@ mem0 and Zep offer managed cloud APIs with auth, multi-tenancy, and dashboards. 
 
 ## One-sentence differentiator
 
-> agent-memory-sdk is the only agent memory library that treats "should I use this memory, and how much should I trust it" as a first-class, scored, explainable decision — not as something the caller figures out after retrieval — while remaining fully local and sub-15ms per query.
+> agent-memory-sdk is designed to treat "should I use this memory, and how much should I trust it" as a first-class, scored, explainable decision — not as something the caller figures out after retrieval — while remaining fully local in SQLite-only mode. Measure latency for your workload.

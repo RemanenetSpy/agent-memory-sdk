@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ from agent_memory.search_index import BloomFilter, DynamicStopWords
 from agent_memory.store import MemoryStore, _tokenize, bm25_scores, query_coverage
 
 log = get_logger(__name__)
+
+_VECTOR_BACKFILL_BATCH_SIZE = 64
 
 
 class SqliteMemoryStore(MemoryStore):
@@ -43,6 +46,12 @@ class SqliteMemoryStore(MemoryStore):
         # Thread-local connection cache: one live connection per thread avoids
         # the ~2–3 ms overhead of sqlite3.connect() on every query.
         self._local = threading.local()
+        # Protects concurrent mutations of _bloom, _dyn_stop, and the pending buffers.
+        self._index_lock = threading.Lock()
+        # Ensures only one _warm_indexes run executes at a time.
+        # Non-force calls skip if the lock is held; force calls (rebuild_indexes)
+        # block until the in-progress warm finishes before starting their own.
+        self._warm_lock = threading.Lock()
         # Search-acceleration indexes (both maintained incrementally on write).
         # Bloom filter:   O(k) NONE fast-path — skips FTS5 when no token can match.
         # DynamicStopWords: extends STOP_WORDS with corpus-saturated terms at runtime.
@@ -53,6 +62,10 @@ class SqliteMemoryStore(MemoryStore):
         # of a tiny corpus and filtering them would hurt recall.
         self._dyn_stop: DynamicStopWords = DynamicStopWords(idf_threshold=0.05, min_docs=5_000)
         self._indexes_warm = False   # True after first load from existing DB
+        # Pending buffers: when not None, store() mirrors writes here so
+        # _warm_indexes can replay them into the new filter/stop-words at swap time.
+        self._warm_pending: set[str] | None = None
+        self._dyn_stop_pending: list[tuple[str, str, list[str]]] | None = None
         try:
             self._init_db()
         except sqlite3.Error as exc:
@@ -92,48 +105,82 @@ class SqliteMemoryStore(MemoryStore):
     def rebuild_indexes(self) -> None:
         """Force-rebuild the Bloom filter and DynamicStopWords from the current DB.
 
-        Use after bulk imports (e.g. ``--fast-seed``) that bypass the normal
-        ``store()`` path and therefore don't incrementally update the indexes.
+        Use after bulk imports that bypass the normal ``store()`` path.
         """
-        self._indexes_warm = False
-        self._bloom = BloomFilter(capacity=max(self.count * 2, 100_000))
-        self._dyn_stop = DynamicStopWords(idf_threshold=0.05, min_docs=5_000)
-        self._warm_indexes()
+        self._warm_indexes(force=True)
 
-    def _warm_indexes(self) -> None:
+    def _warm_indexes(self, *, force: bool = False) -> None:
         """Populate the Bloom filter and DynamicStopWords from the existing DB.
 
-        Called once after init.  For large stores this is O(n) but runs in the
-        background on the first `__init__` call; subsequent writes are O(1).
+        Only one warm runs at a time (_warm_lock): non-force calls skip if a
+        warm is already running; force calls (rebuild_indexes) wait for it to
+        finish before starting their own.  Pending buffers capture every
+        store() write that arrives during the build window so no tokens are
+        lost when the new filter is swapped in.
         """
-        if self._indexes_warm:
-            return
-        conn = self._connect()
-        rows = conn.execute("SELECT query, content, tags FROM memories").fetchall()
-        if not rows:
-            self._indexes_warm = True
-            return
+        acquired = self._warm_lock.acquire(blocking=force)
+        if not acquired:
+            return  # another warm is in progress; let it complete
 
-        from collections import Counter
-        term_freq: Counter[str] = Counter()
-        doc_count = len(rows)
+        try:
+            with self._index_lock:
+                if self._indexes_warm and not force:
+                    return
+                # Open both pending buffers.  store() will mirror writes here
+                # so we can replay them at swap time.
+                self._warm_pending = set()
+                self._dyn_stop_pending = []
+                self._indexes_warm = False
 
-        for query, content, tags_json in rows:
-            import json as _json
+            term_freq: Counter[str] = Counter()
+            doc_count = 0
+
+            # Dedicated read connection — never touches the thread-local connection
+            # so we cannot interfere with (or be blocked by) any open transaction.
+            read_conn = sqlite3.connect(self.db_path, timeout=30.0)
             try:
-                tags = _json.loads(tags_json) if tags_json else []
-            except Exception:
-                tags = []
-            text = f"{query} {content} {' '.join(tags)}"
-            tokens = {t for t in _tokenize(text) if len(t) > 1}
-            for t in tokens:
-                self._bloom.add(t)
-                term_freq[t] += 1
+                read_conn.execute("BEGIN DEFERRED")
+                doc_count = read_conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+                local_bloom = BloomFilter(capacity=max(doc_count * 2, 100_000))
+                local_dyn_stop = DynamicStopWords(idf_threshold=0.05, min_docs=5_000)
+                if doc_count:
+                    for query, content, tags_json in read_conn.execute(
+                        "SELECT query, content, tags FROM memories"
+                    ):
+                        try:
+                            tags = json.loads(tags_json) if tags_json else []
+                        except Exception:
+                            tags = []
+                        text = f"{query} {content} {' '.join(tags)}"
+                        tokens = {t for t in _tokenize(text) if len(t) > 1}
+                        for t in tokens:
+                            local_bloom.add(t)
+                            term_freq[t] += 1
+                read_conn.execute("ROLLBACK")
+            finally:
+                read_conn.close()
 
-        self._dyn_stop.rebuild_from_counter(term_freq, doc_count)
-        self._indexes_warm = True
-        log.debug("Indexes warmed  n=%d  bloom_tokens=%d  dyn_stop=%d",
-                  doc_count, self._bloom.estimated_count, self._dyn_stop.dynamic_count)
+            local_dyn_stop.rebuild_from_counter(term_freq, doc_count)
+
+            with self._index_lock:
+                # Replay exact tokens added by concurrent store() calls.
+                if self._warm_pending:
+                    for t in self._warm_pending:
+                        local_bloom.add(t)
+                # Replay dyn_stop add_entry calls missed by the DB snapshot.
+                if self._dyn_stop_pending:
+                    for q, c, tags in self._dyn_stop_pending:
+                        local_dyn_stop.add_entry(q, c, tags)
+                self._warm_pending = None
+                self._dyn_stop_pending = None
+                self._bloom = local_bloom
+                self._dyn_stop = local_dyn_stop
+                self._indexes_warm = True
+
+            log.debug("Indexes warmed  n=%d  bloom_tokens=%d  dyn_stop=%d",
+                      doc_count, local_bloom.estimated_count, local_dyn_stop.dynamic_count)
+        finally:
+            self._warm_lock.release()
 
     def close(self) -> None:
         """Explicitly release the cached connection for this thread."""
@@ -289,13 +336,15 @@ class SqliteMemoryStore(MemoryStore):
             return
         import sqlite_vec
 
-        texts = [f"{q}\n{c}\n{t}" for _, q, c, t in rows]
-        vectors = self._embedder(texts)
-        for (rowid, *_), vector in zip(rows, vectors):
-            conn.execute(
-                "INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)",
-                (rowid, sqlite_vec.serialize_float32(vector)),
-            )
+        for start in range(0, len(rows), _VECTOR_BACKFILL_BATCH_SIZE):
+            batch = rows[start : start + _VECTOR_BACKFILL_BATCH_SIZE]
+            texts = [f"{query}\n{content}\n{tags}" for _, query, content, tags in batch]
+            vectors = self._embedder(texts)
+            for (rowid, *_), vector in zip(batch, vectors):
+                conn.execute(
+                    "INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)",
+                    (rowid, sqlite_vec.serialize_float32(vector)),
+                )
 
     @property
     def semantic_search_enabled(self) -> bool:
@@ -382,38 +431,57 @@ class SqliteMemoryStore(MemoryStore):
                 )
             conn.commit()
 
-        # Update search-acceleration indexes (O(tokens) per entry)
+        # Update search-acceleration indexes under lock — bytearray |= and
+        # Counter updates are not atomic; concurrent store() calls would race.
+        # Also mirror into _warm_pending when a _warm_indexes() call is in
+        # progress so those tokens are not lost when the new filter is swapped in.
         text = f"{entry.query} {entry.content} {' '.join(entry.tags)}"
         tokens = {t for t in _tokenize(text) if len(t) > 1}
-        self._bloom.add_many(tokens)
-        self._dyn_stop.add_entry(entry.query, entry.content, entry.tags)
+        with self._index_lock:
+            self._bloom.add_many(tokens)
+            self._dyn_stop.add_entry(entry.query, entry.content, entry.tags)
+            if self._warm_pending is not None:
+                self._warm_pending.update(tokens)
+            if self._dyn_stop_pending is not None:
+                self._dyn_stop_pending.append(
+                    (entry.query, entry.content, list(entry.tags))
+                )
 
         return entry
 
     def get(self, memory_id: str) -> MemoryEntry | None:
         conn = self._connect()
         conn.row_factory = sqlite3.Row
-        cursor = conn.execute("SELECT * FROM memories WHERE id = ?", (memory_id,))
-        row = cursor.fetchone()
+        try:
+            row = conn.execute(
+                "SELECT * FROM memories WHERE id = ?", (memory_id,)
+            ).fetchone()
+        finally:
+            conn.row_factory = None
         if not row:
             return None
         return self._row_to_entry(row)
 
     def touch(self, memory_id: str) -> bool:
-        """Fast access-count increment — no FTS5 reindex, no explicit commit.
+        """Fast access-count increment — no FTS5 reindex.
 
-        Only ``access_count`` is updated in the WAL; content fields and
-        indexes are untouched.  We skip ``conn.commit()`` here because
-        access_count is used only for scoring (non-critical) and the WAL
-        guarantees the write is durable without an immediate fsync.  The
-        commit will be batched with the next explicit write operation.
-        Removing this commit cuts p50 resolve() latency by ~9ms.
+        Only ``access_count`` is updated; content fields and indexes are
+        untouched.  Commits immediately so the write transaction releases the
+        write lock for concurrent writers (SQLite allows only one writer at a
+        time, even in WAL mode).
+
+        Limitation: this issues ``conn.commit()`` on the shared thread-local
+        connection.  Do not call ``touch()`` from inside an outer write
+        transaction on the same thread — the commit here would prematurely
+        flush that transaction.  All current internal call-sites are
+        single-statement; this note is for future callers.
         """
         conn = self._connect()
         cursor = conn.execute(
             "UPDATE memories SET access_count = access_count + 1 WHERE id = ?",
             (memory_id,),
         )
+        conn.commit()
         return cursor.rowcount > 0
 
     def update(self, entry: MemoryEntry) -> MemoryEntry:
@@ -496,11 +564,14 @@ class SqliteMemoryStore(MemoryStore):
 
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
-            cursor = conn.execute(
-                f"SELECT * FROM memories {where_sql} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
-                params,
-            )
-            return [self._row_to_entry(row) for row in cursor.fetchall()]
+            try:
+                rows = conn.execute(
+                    f"SELECT * FROM memories {where_sql} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                    params,
+                ).fetchall()
+            finally:
+                conn.row_factory = None
+            return [self._row_to_entry(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Search
@@ -579,17 +650,20 @@ class SqliteMemoryStore(MemoryStore):
         # need commit() and skipping it removes ~2ms of overhead per query.
         conn = self._connect()
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            f"""
-            SELECT m.*, bm25(memories_fts) AS fts_rank
-            FROM memories_fts
-            JOIN memories m ON m.rowid = memories_fts.rowid
-            WHERE memories_fts MATCH ?{filter_sql}
-            ORDER BY fts_rank
-            LIMIT ?
-            """,
-            [match_expr, *params, top_k + 10],
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT m.*, bm25(memories_fts) AS fts_rank
+                FROM memories_fts
+                JOIN memories m ON m.rowid = memories_fts.rowid
+                WHERE memories_fts MATCH ?{filter_sql}
+                ORDER BY fts_rank
+                LIMIT ?
+                """,
+                [match_expr, *params, top_k + 10],
+            ).fetchall()
+        finally:
+            conn.row_factory = None
 
         if not rows:
             return []
@@ -648,29 +722,32 @@ class SqliteMemoryStore(MemoryStore):
 
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
-            # Over-fetch so post-KNN filtering still yields top_k results.
-            knn = conn.execute(
-                """
-                SELECT rowid, distance FROM memories_vec
-                WHERE embedding MATCH ? AND k = ?
-                """,
-                (sqlite_vec.serialize_float32(query_vector), max(top_k * 4, 20)),
-            ).fetchall()
-            if not knn:
-                return []
+            try:
+                # Over-fetch so post-KNN filtering still yields top_k results.
+                knn = conn.execute(
+                    """
+                    SELECT rowid, distance FROM memories_vec
+                    WHERE embedding MATCH ? AND k = ?
+                    """,
+                    (sqlite_vec.serialize_float32(query_vector), max(top_k * 4, 20)),
+                ).fetchall()
+                if not knn:
+                    return []
 
-            distances = {row["rowid"]: float(row["distance"]) for row in knn}
-            placeholders = ",".join("?" * len(distances))
-            where_clauses, params = self._build_filters(
-                scopes=scopes,
-                include_archived=include_archived,
-                include_expired=include_expired,
-            )
-            filter_sql = (" AND " + " AND ".join(where_clauses)) if where_clauses else ""
-            rows = conn.execute(
-                f"SELECT rowid, * FROM memories WHERE rowid IN ({placeholders}){filter_sql}",
-                [*distances.keys(), *params],
-            ).fetchall()
+                distances = {row["rowid"]: float(row["distance"]) for row in knn}
+                placeholders = ",".join("?" * len(distances))
+                where_clauses, params = self._build_filters(
+                    scopes=scopes,
+                    include_archived=include_archived,
+                    include_expired=include_expired,
+                )
+                filter_sql = (" AND " + " AND ".join(where_clauses)) if where_clauses else ""
+                rows = conn.execute(
+                    f"SELECT rowid, * FROM memories WHERE rowid IN ({placeholders}){filter_sql}",
+                    [*distances.keys(), *params],
+                ).fetchall()
+            finally:
+                conn.row_factory = None
 
         matches = [
             (self._row_to_entry(row), max(0.0, 1.0 - distances[row["rowid"]]))

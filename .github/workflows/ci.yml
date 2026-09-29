@@ -6,9 +6,14 @@ on:
   pull_request:
     branches: [main, develop]
 
+# Deny all permissions by default; each job grants only what it needs.
+permissions: {}
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
@@ -41,6 +46,8 @@ jobs:
     # Exercises the optional sqlite-vec + fastembed vector-search path.
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -64,6 +71,8 @@ jobs:
     # Exercises the optional Redis backend via fakeredis (no real server needed).
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -88,6 +97,8 @@ jobs:
     # Exercises the optional FastAPI REST server.
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -111,6 +122,8 @@ jobs:
     # Exercises the optional Postgres backend with a real server.
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: read
 
     services:
       postgres:
@@ -151,6 +164,8 @@ jobs:
     # Tests for graph, confidence, multi-agent, benchmarks, and adapters.
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -181,6 +196,8 @@ jobs:
     # LangChain adapter integration tests.
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -204,6 +221,8 @@ jobs:
     # Decision-quality evaluation over all datasets, including trap cases.
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -229,6 +248,8 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout

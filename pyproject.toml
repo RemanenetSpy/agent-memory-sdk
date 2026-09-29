@@ -7,7 +7,7 @@ name = "agent-memory-sdk"
 description = "Persistent semantic memory for AI agents with replay, restore, verify, and ignore decisions"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
+license = "Apache-2.0"
 authors = [{ name = "TheProdSDE", email = "theprodsde@gmail.com" }]
 keywords = [
     "ai-agents",
@@ -22,6 +22,7 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -75,6 +76,10 @@ dashboard = [
     "streamlit>=1.35.0",
     "altair>=5.0.0",
     "pandas>=2.0.0",
+]
+charts = [
+    # Only needed to regenerate benchmark charts (make stress-charts).
+    "matplotlib>=3.8.0",
 ]
 dev = [
     "pytest>=8.0.0",

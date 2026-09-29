@@ -92,10 +92,11 @@ class BloomFilter:
     def __contains__(self, token: object) -> bool:
         if not isinstance(token, str):
             return False
-        return all(
-            self._bits[self._hash(token, s) >> 3] & (1 << (self._hash(token, s) & 7))
-            for s in range(self._k)
-        )
+        for s in range(self._k):
+            idx = self._hash(token, s)
+            if not (self._bits[idx >> 3] & (1 << (idx & 7))):
+                return False
+        return True
 
     def any_of(self, tokens: Iterable[str]) -> bool:
         """Return True if ANY token is probably in the filter.
@@ -164,14 +165,25 @@ class DynamicStopWords:
         text = f"{query} {response} {' '.join(tags or [])}"
         tokens = {t for t in _tokenize(text) if len(t) > 1}
         self._doc_count += 1
-        if self._doc_count < self._min_docs:
-            # Too few documents — IDF is meaningless; don't promote anything.
-            for t in tokens:
-                self._term_freq[t] += 1
-            return
         for t in tokens:
             self._term_freq[t] += 1
-            # Promote to dynamic stop word if above threshold
+
+        if self._doc_count < self._min_docs:
+            # Too few documents — IDF is meaningless; don't promote anything yet.
+            return
+
+        if self._doc_count == self._min_docs:
+            # First time we cross the threshold: bulk-promote all terms that
+            # were accumulated before this point and already exceed the cutoff.
+            # Without this pass, terms counted pre-threshold are never promoted
+            # by the per-token check below (which only fires on new entries).
+            self._dynamic = {
+                t for t, f in self._term_freq.items()
+                if t not in STOP_WORDS and f / self._doc_count > self._threshold
+            }
+            return
+
+        for t in tokens:
             if (
                 t not in STOP_WORDS
                 and t not in self._dynamic

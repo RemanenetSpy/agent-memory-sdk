@@ -1,18 +1,18 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.theprodsde/agent-memory",
   "description": "Persistent agent memory with a decision layer: replay, restore, verify, or none — explainable.",
   "repository": {
     "url": "https://github.com/TheProdSDE/agent-memory-sdk",
     "source": "github"
   },
-  "version": "0.1.4",
+  "version": "0.1.5",
   "websiteUrl": "https://github.com/TheProdSDE/agent-memory-sdk",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "agent-memory-sdk",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -29,6 +29,36 @@
           "description": "Collection (database) name within the memory directory",
           "isRequired": false,
           "default": "agent_memories"
+        }
+      ],
+      "tools": [
+        {
+          "name": "resolve_memory",
+          "description": "Retrieve memory and decide how the agent should respond. Returns one of four actions: replay (return stored response verbatim), restore (inject as context), verify (validate before reuse), or none (answer fresh). Includes confidence score and reasoning."
+        },
+        {
+          "name": "remember_memory",
+          "description": "Store a query/response pair in persistent agent memory with optional tags, type, scope, confidence, TTL, and verification flag."
+        },
+        {
+          "name": "list_memories",
+          "description": "List stored memories with pagination, scope filter, and optional archived entries."
+        },
+        {
+          "name": "get_memory_by_id",
+          "description": "Fetch a single memory entry by its ID, including full response and metadata."
+        },
+        {
+          "name": "forget_memory",
+          "description": "Permanently delete a memory by ID."
+        },
+        {
+          "name": "archive_memory",
+          "description": "Archive a memory so it is excluded from future retrieval without deleting it."
+        },
+        {
+          "name": "consolidate_memories",
+          "description": "Merge near-duplicate memories into summary entries, reducing redundancy in the store."
         }
       ]
     }

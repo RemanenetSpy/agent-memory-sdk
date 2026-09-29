@@ -7,6 +7,7 @@ Launch:
 from __future__ import annotations
 
 import os
+from typing import Any
 
 try:
     import streamlit as st
@@ -28,26 +29,7 @@ from agent_memory.models import MemoryScope, MemoryType  # noqa: E402
 # ── Minimal CSS overrides ─────────────────────────────────────────────────────
 st.markdown("""
 <style>
-.stMainBlockContainer { padding-top: 0.75rem !important; }
-/* Metric tiles — dark card with fully visible text */
-[data-testid="stMetric"] {
-    background: #1e293b !important;
-    border: 1px solid #334155 !important;
-    border-radius: 10px !important;
-    padding: 12px 16px !important;
-}
-[data-testid="stMetricValue"] {
-    font-size: 1.6rem !important;
-    font-weight: 700 !important;
-    color: #f1f5f9 !important;
-}
-[data-testid="stMetricLabel"] {
-    font-size: 0.72rem !important;
-    color: #94a3b8 !important;
-    text-transform: uppercase !important;
-    letter-spacing: .4px !important;
-}
-[data-testid="stMetricDelta"] { color: #94a3b8 !important; }
+.stMainBlockContainer { padding-top: 3.5rem !important; }
 footer { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -107,13 +89,26 @@ by_state          = _stats.get("by_state", {})
 by_type           = _stats.get("by_type", {})
 total_access: int = _stats.get("total_access_count", 0)
 
-# ── KPI strip ─────────────────────────────────────────────────────────────────
+# ── KPI strip — custom HTML tiles (st.metric label visibility is broken in newer
+# Streamlit versions that set visibility:hidden via the visibility="0" attribute
+# with higher-specificity stylesheet rules that !important cannot override reliably)
+def _kpi(col: Any, label: str, value: int) -> None:
+    col.markdown(
+        f"""<div style="background:#1e293b;border:1px solid #334155;border-radius:10px;
+        padding:12px 16px;margin-bottom:4px">
+        <div style="font-size:0.72rem;color:#94a3b8;text-transform:uppercase;
+        letter-spacing:.5px;font-weight:600;margin-bottom:4px">{label}</div>
+        <div style="font-size:1.6rem;font-weight:700;color:#f1f5f9">{value}</div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
 k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("Total",    total)
-k2.metric("Active",   by_state.get("active", 0))
-k3.metric("Archived", by_state.get("archived", 0))
-k4.metric("Expired",  by_state.get("expired", 0))
-k5.metric("Accesses", total_access)
+_kpi(k1, "Total",    total)
+_kpi(k2, "Active",   by_state.get("active", 0))
+_kpi(k3, "Archived", by_state.get("archived", 0))
+_kpi(k4, "Expired",  by_state.get("expired", 0))
+_kpi(k5, "Accesses", total_access)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 t_stats, t_browse, t_resolve = st.tabs(["📊 Stats", "📋 Memories", "🔍 Resolve"])

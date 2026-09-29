@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "system": {
+    "name": "agent-memory-sdk",
+    "version": "working-tree lexical benchmark",
+    "adapter_commit": "uncommitted",
+    "deployment": "local"
+  },
+  "dataset": {
+    "name": "LongMemEval_S",
+    "release": "cleaned",
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "retrieval_unit": "turn_pair"
+  },
+  "environment": {
+    "os": "macOS",
+    "hardware": "M-series MacBook",
+    "python": "3.13.13",
+    "command": "uv run python benchmarks/longmemeval/run_retrieval.py --out benchmarks/longmemeval/results_lexical_500q_final.json"
+  },
+  "configuration": {
+    "top_k": 10,
+    "cache_state": "disabled",
+    "embedding_model": "none",
+    "llm_calls_per_ingest": 0,
+    "llm_calls_per_query": 0
+  },
+  "metrics": {
+    "recall_at_5": 0.9596,
+    "recall_at_10": 0.9787,
+    "query_latency_ms": {
+      "p50": 10.04,
+      "p90": 11.85,
+      "p95": 12.95,
+      "p99": 20.21
+    },
+    "process_rss_mb": 2661.36,
+    "ingest_seconds": 204.5,
+    "cost_usd": 0.0
+  },
+  "artifacts": {
+    "raw_results": "../../longmemeval/results_lexical_500q_final.json"
+  },
+  "limitations": [
+    "Retrieval proxy only; this is not an end-to-end QA result.",
+    "Independent per-question SQLite stores, not a shared persistent corpus.",
+    "Cleaned release and turn-pair indexing are not directly comparable with original-release session-index baselines."
+  ]
+}
