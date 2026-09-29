@@ -1,5 +1,10 @@
 """Persistent agentic memory with semantic retrieval and restore/replay/verify decisions."""
 
+from agent_memory.backends import (
+    BackendContext,
+    available_backends,
+    register_backend,
+)
 from agent_memory.benchmark import BenchmarkResult, format_benchmark_report, run_benchmark
 from agent_memory.benchmarks.harness import (
     BenchmarkDataset,
@@ -53,6 +58,7 @@ from agent_memory.policy import DecisionPolicy, DefaultPolicy
 from agent_memory.retriever import FusionStrategy, LinearFusionStrategy, RRFFusionStrategy
 from agent_memory.scoped import MemoryView
 from agent_memory.sqlite_store import SqliteMemoryStore
+from agent_memory.vector_index import IvfFlatConfig, VectorIndexConfig
 
 try:
     from agent_memory._version import __version__
@@ -60,6 +66,11 @@ except ImportError:
     __version__ = "0.0.0"
 
 __all__ = [
+    "BackendContext",
+    "IvfFlatConfig",
+    "VectorIndexConfig",
+    "available_backends",
+    "register_backend",
     "BenchmarkDataset",
     "BenchmarkHarness",
     "BenchmarkResult",

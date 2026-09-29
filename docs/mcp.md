@@ -99,4 +99,4 @@ For `restore` / `verify`: the payload includes `context` (array of matching entr
 |----------|---------|-------------|
 | `AGENT_MEMORY_DIR` | `.agent_memory` | Persist directory |
 | `AGENT_MEMORY_COLLECTION` | `agent_memories` | Collection / table name |
-| `AGENT_MEMORY_BACKEND` | `sqlite` | `sqlite` · `chromadb` · `redis` · `postgres` |
+| `AGENT_MEMORY_BACKEND` | `sqlite` | `sqlite` · `chromadb` · `redis` · `postgres` · `qdrant` |

@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (vector index batch — issues #18, #19, #20)
+- **Redis vector search (RedisVSS)** — the Redis backend now builds an HNSW index
+  over a `FT.CREATE` VECTOR field and `search()` is real cosine KNN, pre-filtered
+  server-side on scope and archived TAGs. The index scan itself is
+  sub-millisecond; end to end `search()` is ~6 ms at 2,000 memories, of which
+  ~2.8 ms is embedding the query — see [docs/benchmarks.md](docs/benchmarks.md). Needs RediSearch
+  (Redis 8+ or Redis Stack) plus `[semantic]`; without either it falls back to
+  Python BM25 exactly as before. Entries stored before the upgrade are embedded
+  automatically at init, and the index is rebuilt if the embedding model changes.
+  RediSearch only indexes db 0 — on any other database the store logs a warning
+  and stays lexical.
+- **PostgreSQL HNSW index** — the Postgres backend now picks `hnsw` over
+  `ivfflat` when the server's pgvector is ≥ 0.7.0. HNSW accepts online inserts
+  and its scan cost stays roughly flat as the table grows, where IVFFlat wants a
+  populated table at build time and slows linearly. Measured: at 20,000 rows HNSW
+  scanned in 0.58ms against IVFFlat's 4.76ms — though IVFFlat was the faster of
+  the two at 2,000 rows, which is why "auto" exists. Built `CONCURRENTLY` so it does not lock writes; an
+  existing IVFFlat index is dropped once HNSW replaces it. Override with
+  `PostgresMemoryStore(vector_index="hnsw" | "ivfflat")`, and tune recall with
+  `ef_search`. New `vector_index_type` and `pgvector_version` properties.
+- **Qdrant backend** (`backend="qdrant"`, `[qdrant]` extra) for collections past
+  what SQLite or Postgres serves. Verified at 2,000 entries; Qdrant's own
+  published limits go much further and are not claims this repo has tested.
+  Hybrid retrieval:
+  dense KNN in Qdrant plus BM25 over candidates narrowed by Qdrant's full-text
+  payload index, fused with the existing RRF retriever. Scope, type, archived and
+  TTL filters all run server-side on payload indexes; the whole entry lives in
+  the point payload, so there is no second store to keep in sync. Supports Qdrant
+  Cloud and an embedded `path=` mode with no server.
+- `touch()` overrides on the Redis and Qdrant stores: REPLAY's hot path patches
+  the usage counters in place instead of re-embedding the entry.
+- `docker-compose.dev.yml` now ships a vector index in every service — `redis:8`
+  (bundled query engine), the `pgvector/pgvector` Postgres image, and Qdrant.
+
+- **Shared, injectable vector-index config** (`VectorIndexConfig`,
+  `IvfFlatConfig`): `m`, `ef_construction`, `ef_search` and the KNN over-fetch
+  policy are now one validated, frozen dataclass accepted by all three server
+  backends (`vector_config=`), instead of module constants no caller could reach.
+  Each store still ships its own engine's defaults, so passing nothing changes
+  nothing. Exposed as `store.vector_config`.
+- **Backend registry** (`agent_memory.backends`): `Memory(backend=...)` resolves
+  through a registry instead of an if/elif chain, so adding a backend no longer
+  edits `Memory.__init__` or its error message. `register_backend()` lets a
+  third-party store plug in — `Memory(backend="mystore")` — and factories import
+  lazily, so `import agent_memory` still pulls in no optional driver.
+- `MemoryStore.semantic_search_enabled` is part of the abstract interface
+  (defaulting to False) rather than a duck-typed attribute the retriever probed
+  with `getattr`.
+- `scripts/backend_benchmark.py` — compares every backend on one corpus, one
+  query set and one embedder, reporting `resolve()` / `search()` /
+  `keyword_search()` latency separately, plus **Recall@k** (a rank cutoff over
+  what the index found) kept distinct from **answer rate** (what the decision
+  layer did at a given `restore_threshold`). Measured as Recall@k, every vector
+  backend retrieves equally well (92.2% R@1 fused) and vector search is worth ~8
+  points over lexical-only — the spread that shows up in answer rate is a
+  threshold effect, not a retrieval difference. Results and the HNSW-vs-IVFFlat
+  crossover: [docs/benchmarks.md](docs/benchmarks.md).
+- `scripts/stress_test.py --backend / --backend-opt` — the stress harness can now
+  measure any registered backend, not just SQLite.
+
+### Performance
+- **Redis reads were O(N) round trips.** `list_all()` issued one `GET` per entry,
+  so every keyword search cost one round trip per stored memory. Batched into a
+  single `MGET`: `resolve()` at 2,000 memories went from ~86 ms to ~8 ms.
+- **Redis keyword search now uses RediSearch.** The index carries a `TEXT` field,
+  so the BM25 half of every hybrid query is served by the inverted index instead
+  of reading the whole corpus back into Python and re-ranking it — O(N) work
+  behind an O(log N) vector index. `keyword_search()` p50 dropped from ~44 ms to
+  ~1.5 ms. Stores without RediSearch keep the Python BM25 path.
+- **Postgres opened a new connection per statement.** Every read paid a TCP
+  handshake plus authentication, putting a ~20 ms floor under each query.
+  Connections are now cached per thread (with `close()` to release them);
+  `resolve()` p50 fell from ~57 ms to ~14 ms and writes went from 29/s to 78/s.
+- Postgres reads no longer `SELECT *`, which was streaming the 384-dim embedding
+  and the tsvector back on every row the caller never looked at.
+- `IvfFlatConfig` now defaults to `probes=3` against `lists=10`. It was
+  `probes=10`, which probes *every* list — a brute-force scan dressed as an index.
+
+### Fixed
+- **Postgres keyword search could not match a paraphrase.** It used
+  `plainto_tsquery()`, which ANDs every term, so "how to change my login
+  credentials" only matched documents containing all five words — while the
+  SQLite, Redis and Qdrant backends all rank an OR recall set. Now builds an OR
+  `to_tsquery()` from tokenised content terms. Labelled-query recall on the
+  Postgres backend went from 23.5% to ~47%.
+- **Postgres embedded different text than every other backend** (`query` +
+  `content`, omitting tags), so the same corpus ranked differently there. All
+  backends now index one shared `search_document()`.
+- **Postgres scoped search was broken.** `keyword_search()` and the pgvector KNN
+  path bound positional parameters in the wrong order whenever `scopes` (or
+  `memory_type`) narrowed the query, because the placeholder in the SELECT list
+  binds ahead of the WHERE clause's. Scoped keyword search returned results for
+  the wrong filter and scoped vector search raised
+  `InvalidTextRepresentation: invalid input syntax for type vector`.
+- **Postgres vector search failed outright with pgvector-python ≥ 0.4**, which
+  removed `register_vector_globally()`. Registration is now per connection, runs
+  after `CREATE EXTENSION`, and is best-effort — every query casts explicitly
+  with `::vector`, so an unregistered connection still reads and writes correctly.
+- `Memory(backend=...)` now forwards `embedder` and `enable_embeddings` to the
+  Redis, Postgres and Qdrant stores; previously both were silently dropped and
+  those backends could never be given a custom embedder through `Memory`.
+
 ### Added (v0.2 performance & semantic search batch)
 - **SQLite FTS5 keyword index** with built-in BM25 ranking: keyword search no
   longer loads up to 10k rows and rebuilds a Python BM25 index per query

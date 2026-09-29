@@ -5,17 +5,16 @@ import builtins
 from collections.abc import Callable
 from pathlib import Path
 
+from agent_memory.backends import BackendContext, build_store
 from agent_memory.confidence import ConfidenceEvent, ConfidenceLearner
 from agent_memory.decision import DecisionEngine
 from agent_memory.entity_extractor import EntityExtractor, ExtractedMemory
-from agent_memory.exceptions import ConfigurationError
 from agent_memory.logging_config import get_logger
 from agent_memory.models import MemoryAction, MemoryDecision, MemoryEntry, MemoryScope, MemoryType
 from agent_memory.policy import DecisionPolicy, DefaultPolicy
 from agent_memory.retriever import MemoryRetriever
 from agent_memory.scoped import MemoryView
-from agent_memory.sqlite_store import SqliteMemoryStore
-from agent_memory.store import ChromaDBStore, MemoryStore
+from agent_memory.store import MemoryStore
 from agent_memory.ttl import parse_ttl
 
 log = get_logger(__name__)
@@ -32,7 +31,8 @@ class Memory:
         replay_threshold: float = 0.85,
         restore_threshold: float = 0.70,
         verify_threshold: float = 0.80,
-        backend: str = "sqlite",  # "chromadb" | "sqlite" | "redis" | "postgres"
+        # Any name in agent_memory.backends.available_backends()
+        backend: str = "sqlite",
         embedder: object | None = None,
         enable_embeddings: bool | str = "auto",
         store: MemoryStore | None = None,
@@ -42,27 +42,18 @@ class Memory:
         if store is not None:
             # Accept a pre-built store directly (useful for testing / custom backends)
             self.store: MemoryStore = store
-        elif backend == "sqlite":
-            self.store = SqliteMemoryStore(
-                persist_dir=persist_dir,
-                collection_name=collection_name,
-                embedder=embedder,  # type: ignore[arg-type]
-                enable_embeddings=enable_embeddings,
-            )
-        elif backend == "chromadb":
-            self.store = ChromaDBStore(persist_dir=persist_dir, collection_name=collection_name)
-        elif backend == "redis":
-            from agent_memory.redis_store import RedisMemoryStore
-
-            self.store = RedisMemoryStore(**backend_kwargs)  # type: ignore[arg-type]
-        elif backend == "postgres":
-            from agent_memory.postgres_store import PostgresMemoryStore
-
-            self.store = PostgresMemoryStore(**backend_kwargs)  # type: ignore[arg-type]
         else:
-            raise ConfigurationError(
-                f"Unknown backend: {backend!r}. "
-                "Choices: 'sqlite', 'chromadb', 'redis', 'postgres'"
+            # Resolved through the registry rather than an if/elif chain, so a new
+            # backend is a registration rather than an edit here.
+            self.store = build_store(
+                backend,
+                BackendContext(
+                    persist_dir=persist_dir,
+                    collection_name=collection_name,
+                    embedder=embedder,
+                    enable_embeddings=enable_embeddings,
+                    kwargs=backend_kwargs,
+                ),
             )
         log.info("Memory initialised  backend=%s", backend)
         import warnings as _warnings

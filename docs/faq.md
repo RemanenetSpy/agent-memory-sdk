@@ -54,9 +54,18 @@ For SQLite FTS5, query-term document frequency can matter more than total row
 count. Measure the corpus and query distribution you plan to ship; see
 [stress-testing.md](stress-testing.md) for the reproducible harness.
 
-**When should I use Redis or Postgres instead of SQLite?**
-- **Redis**: multiple services sharing memory with sub-ms read latency requirements
+**When should I use Redis, Postgres, or Qdrant instead of SQLite?**
+- **Redis**: multiple services sharing memory, and the lowest latency of the server backends
 - **Postgres**: production deployment with existing SQL infrastructure and SQL-native aggregates
+- **Qdrant**: the corpus has outgrown a general-purpose database and KNN latency
+  is the bottleneck — Qdrant is built for nothing but vector search, and scales
+  further than we have measured (our own numbers stop at 20,000 entries; treat
+  Qdrant's published limits as theirs, not ours)
+
+All three do real vector KNN, but only with a server-side index: RediSearch on
+Redis (8+ / Stack, db 0), the `vector` extension on Postgres, and natively on
+Qdrant. Without one — or without the `[semantic]` extra — `search()` quietly
+becomes keyword search. `memory.store.semantic_search_enabled` tells you which.
 - **SQLite**: a zero-setup local default; validate its behavior against your workload and deployment needs
 
 ---

@@ -61,6 +61,10 @@ postgres = [
 pgvector = [
     "pgvector>=0.2.0",
 ]
+qdrant = [
+    # 1.12 is the first release with query_points() and facet().
+    "qdrant-client>=1.12.0",
+]
 api = [
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.29.0",
@@ -90,6 +94,7 @@ dev = [
     "fakeredis>=2.20.0",
     "fastapi>=0.110.0",
     "httpx>=0.27.0",
+    "qdrant-client>=1.12.0",
 ]
 
 [project.scripts]
@@ -145,6 +150,7 @@ module = [
     "fakeredis.*",
     "psycopg2.*",
     "pgvector.*",
+    "qdrant_client.*",
     "fastapi.*",
     "uvicorn.*",
     "httpx.*",

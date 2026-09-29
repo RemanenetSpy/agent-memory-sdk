@@ -141,9 +141,12 @@ mem = Memory(backend="redis", url="redis://localhost:6379/0")
 
 # Postgres
 mem = Memory(backend="postgres", dsn="postgresql://user:pw@localhost/mydb")
+
+# Qdrant — for collections past what SQLite or Postgres serves
+mem = Memory(backend="qdrant", url="http://localhost:6333")
 ```
 
-Start Redis or Postgres with one command:
+Start Redis, Postgres, or Qdrant with one command:
 ```bash
 docker compose -f docker-compose.dev.yml up -d
 ```

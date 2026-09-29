@@ -47,6 +47,16 @@ def _content_tokens(text: str) -> set[str]:
     return tokens
 
 
+def search_document(entry: MemoryEntry) -> str:
+    """The text every backend indexes for an entry — keyword and vector alike.
+
+    One definition so a paraphrase scores the same whichever backend answers it;
+    if the query, content and tags were combined differently per backend, the
+    same corpus would rank differently on each.
+    """
+    return f"{entry.query}\n{entry.content}\n{' '.join(entry.tags)}"
+
+
 def query_coverage(query: str, document: str) -> float:
     """Fraction of the query's content words that appear in the document."""
     query_tokens = _content_tokens(query)
@@ -178,6 +188,19 @@ class MemoryStore(ABC):
         """Return the total number of stored memories."""
         ...
 
+    @property
+    def semantic_search_enabled(self) -> bool:
+        """True when :meth:`search` ranks by embeddings rather than lexically.
+
+        Part of the interface rather than a duck-typed extra, because
+        :class:`~agent_memory.retriever.MemoryRetriever` branches on it: when a
+        store reports False its ``search()`` is known to return the same list as
+        ``keyword_search()``, so the retriever skips the duplicate query instead
+        of fusing a list with itself. Default False — a backend that gains a
+        vector index overrides it (see the Redis, Postgres and Qdrant stores).
+        """
+        return False
+
     def touch(self, memory_id: str) -> bool:
         """Increment access_count and set last_accessed_at for *memory_id*.
 
@@ -268,7 +291,7 @@ class ChromaDBStore(MemoryStore):
         entry.refresh_state()
         self._collection.upsert(
             ids=[entry.id],
-            documents=[self._search_document(entry)],
+            documents=[search_document(entry)],
             metadatas=[self._entry_to_metadata(entry)],
         )
         return entry
@@ -385,12 +408,8 @@ class ChromaDBStore(MemoryStore):
         if not entries:
             return []
 
-        documents = [self._search_document(e) for e in entries]
+        documents = [search_document(e) for e in entries]
         return bm25_scores(query, entries, documents, top_k)
-
-    @staticmethod
-    def _search_document(entry: MemoryEntry) -> str:
-        return f"{entry.query}\n{entry.content}\n{' '.join(entry.tags)}"
 
     def _build_where(
         self,

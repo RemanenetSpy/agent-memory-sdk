@@ -62,6 +62,18 @@ def test_configuration_error_raised_on_bad_backend(tmp_path):
         Memory(persist_dir=tmp_path, backend="nonexistent_backend")
 
 
+def test_configuration_error_lists_every_supported_backend(tmp_path):
+    """The error message is how callers discover the backends; keep it complete."""
+    from agent_memory.manager import Memory
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        Memory(persist_dir=tmp_path, backend="nonexistent_backend")
+
+    message = str(exc_info.value)
+    for backend in ("sqlite", "chromadb", "redis", "postgres", "qdrant"):
+        assert backend in message
+
+
 # ---------------------------------------------------------------------------
 # Logging infrastructure
 # ---------------------------------------------------------------------------

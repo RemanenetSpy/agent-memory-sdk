@@ -13,7 +13,13 @@ from agent_memory.exceptions import BackendConnectionError
 from agent_memory.logging_config import get_logger
 from agent_memory.models import MemoryEntry, MemoryScope, MemoryState, MemoryType
 from agent_memory.search_index import BloomFilter, DynamicStopWords
-from agent_memory.store import MemoryStore, _tokenize, bm25_scores, query_coverage
+from agent_memory.store import (
+    MemoryStore,
+    _tokenize,
+    bm25_scores,
+    query_coverage,
+    search_document,
+)
 
 log = get_logger(__name__)
 
@@ -417,12 +423,12 @@ class SqliteMemoryStore(MemoryStore):
                 conn.execute("DELETE FROM memories_fts WHERE rowid = ?", (rowid,))
                 conn.execute(
                     "INSERT INTO memories_fts(rowid, search_text) VALUES (?, ?)",
-                    (rowid, self._search_document(entry)),
+                    (rowid, search_document(entry)),
                 )
             if self._vec_enabled and self._embedder is not None:
                 import sqlite_vec
 
-                vector = self._embedder([self._search_document(entry)])[0]
+                vector = self._embedder([search_document(entry)])[0]
                 # vec0 tables don't support INSERT OR REPLACE; delete first.
                 conn.execute("DELETE FROM memories_vec WHERE rowid = ?", (rowid,))
                 conn.execute(
@@ -676,7 +682,7 @@ class SqliteMemoryStore(MemoryStore):
         results: list[tuple[MemoryEntry, float]] = []
         for row, raw_score in zip(rows, raw):
             entry = self._row_to_entry(row)
-            coverage = query_coverage(query, self._search_document(entry))
+            coverage = query_coverage(query, search_document(entry))
             if max_raw > 0:
                 score = (raw_score / max_raw) * (0.5 + 0.5 * coverage)
             else:
@@ -703,7 +709,7 @@ class SqliteMemoryStore(MemoryStore):
         )
         if not entries:
             return []
-        documents = [self._search_document(e) for e in entries]
+        documents = [search_document(e) for e in entries]
         return bm25_scores(query, entries, documents, top_k)
 
     def _vector_search(
@@ -840,9 +846,6 @@ class SqliteMemoryStore(MemoryStore):
     # Row mapping
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _search_document(entry: MemoryEntry) -> str:
-        return f"{entry.query}\n{entry.content}\n{' '.join(entry.tags)}"
 
     def _row_to_entry(self, row: sqlite3.Row) -> MemoryEntry:
         return MemoryEntry(

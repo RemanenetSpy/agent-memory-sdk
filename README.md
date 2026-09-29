@@ -150,7 +150,7 @@ Every claim below is reproducible from this repo:
 - **LongMemEval retrieval proxy: 98.1% Recall@5 (_S, semantic) · 87.0% (_M, lexical)** — 500 independent haystacks; not an end-to-end or paper-baseline head-to-head, [full report](benchmarks/longmemeval/REPORT.md)
 - **Reproducible stress harness** for synthetically seeded workloads up to 1,000,000 entries; archive the JSON output before publishing a performance claim ([methodology](docs/stress-testing.md))
 - **Stress-test benchmark charts:** latency percentiles, seed throughput, resource use, action mix, and cache/decision rates for lexical FTS5 runs at 10K, 100K, and 1M entries, with workload and archived result JSON documented in [stress-testing](docs/stress-testing.md)
-- **412 collected tests** across 25 test modules — decision quality, concurrency, all 4 backends, MCP server, adapters — run in [CI](https://github.com/TheProdSDE/agent-memory-sdk/actions) on every push
+- **526 collected tests** across 29 test modules — decision quality, concurrency, all 5 backends, MCP server, adapters — run in [CI](https://github.com/TheProdSDE/agent-memory-sdk/actions) on every push
 - Published on [PyPI](https://pypi.org/project/agent-memory-sdk/) and the official [MCP Registry](https://registry.modelcontextprotocol.io/servers/io.github.theprodsde/agent-memory)
 - Ships with a REST API, Streamlit dashboard, CLI, LangChain/LlamaIndex adapters, and async counterparts for memory read/write and decision operations
 
@@ -198,8 +198,8 @@ REPLAY avoids an LLM call when policy permits it. The latency and cost differenc
 |---------|-------------|
 | **Decision engine** | Every `resolve()` returns REPLAY / RESTORE / VERIFY / NONE — never silent injection |
 | **Explainability** | `decision.explain()` shows per-component scores: semantic, recency, confidence, usage |
-| **Hybrid retrieval** | BM25 FTS5 + optional vector KNN + RRF fusion — fast and accurate |
-| **4 backends** | SQLite (default, zero-setup) · ChromaDB · Redis · PostgreSQL |
+| **Hybrid retrieval** | BM25 FTS5 + vector HNSW KNN + RRF fusion — fast and accurate |
+| **5 backends** | SQLite (default, zero-setup) · ChromaDB · Redis · PostgreSQL · Qdrant |
 | **Framework adapters** | Drop-in `BaseMemory` for LangChain and LlamaIndex |
 | **MCP server** | Works with Cursor, Claude Code, VS Code via Model Context Protocol |
 | **REST API** | FastAPI server with 9 endpoints + Swagger UI |
@@ -464,6 +464,7 @@ Agent Memory is published on the [MCP Registry](https://registry.modelcontextpro
 | **LlamaIndex** `BaseMemory` | `[llamaindex]` | [llamaindex_integration.py](examples/llamaindex_integration.py) |
 | **Redis** backend | `[redis]` | [redis_backend.py](examples/redis_backend.py) |
 | **PostgreSQL** backend | `[postgres]` | [postgres_backend.py](examples/postgres_backend.py) |
+| **Qdrant** backend | `[qdrant]` | [qdrant_backend.py](examples/qdrant_backend.py) |
 | **Multi-agent** isolation | *(none)* | [multi_agent.py](examples/multi_agent.py) |
 | **FastAPI** REST server | `[api]` | [rest_api.py](examples/rest_api.py) |
 | **Confidence + Graph** | *(none)* | [confidence_and_graph.py](examples/confidence_and_graph.py) |
@@ -478,12 +479,12 @@ Agent Memory is published on the [MCP Registry](https://registry.modelcontextpro
 | Component | Technology |
 |-----------|------------|
 | **Language** | Python 3.10+ |
-| **Storage** | SQLite · ChromaDB · Redis · PostgreSQL |
-| **Retrieval** | BM25 FTS5 + Vector KNN + RRF fusion |
+| **Storage** | SQLite · ChromaDB · Redis · PostgreSQL · Qdrant |
+| **Retrieval** | BM25 FTS5 + Vector HNSW KNN (sqlite-vec · RedisVSS · pgvector · Qdrant) + RRF fusion |
 | **Interfaces** | MCP · FastAPI · Streamlit · CLI |
 | **Adapters** | LangChain `BaseMemory` · LlamaIndex `BaseMemory` |
 | **Search DSA** | Bloom filter (NONE fast-path) · Dynamic IDF stop words · RRF fusion |
-| **Testing** | pytest (412 collected tests) · ruff · mypy |
+| **Testing** | pytest (526 collected tests) · ruff · mypy |
 | **CI/CD** | GitHub Actions — test matrix 3.10–3.13 → release gate → PyPI |
 
 No API keys required — everything runs locally.

@@ -7,6 +7,16 @@ Usage:
     python scripts/stress_test.py --memories 1000000 --fast-seed
     python scripts/stress_test.py --memories 10000 --json
 
+Any registered backend can be measured, with connection settings passed through
+as repeated --backend-opt key=value pairs:
+
+    python scripts/stress_test.py --backend redis \
+        --backend-opt url=redis://localhost:6379/0
+    python scripts/stress_test.py --backend postgres \
+        --backend-opt dsn=postgresql://localhost/bench --backend-opt vector_index=hnsw
+    python scripts/stress_test.py --backend qdrant \
+        --backend-opt url=http://localhost:6333
+
 Data files (JSONL — extend as needed):
     benchmarks/stress/memories.jsonl
     benchmarks/stress/queries.jsonl
@@ -120,8 +130,13 @@ def _seed_fast(memory: Memory, n: int, templates: list[dict]) -> float:
     import uuid as _uuid
     from datetime import datetime, timezone
 
+    from agent_memory.sqlite_store import SqliteMemoryStore
+
     store = memory.store
-    if not hasattr(store, "_connect"):
+    # The SQL below is SQLite's own schema, and Postgres also exposes _connect —
+    # so check the type, not the attribute, or --fast-seed corrupts a PG run.
+    if not isinstance(store, SqliteMemoryStore):
+        _progress("  --fast-seed is SQLite-only; using the portable seed path")
         return _seed_normal(memory, n, templates)
 
     t0 = time.perf_counter()
@@ -207,7 +222,8 @@ def _measure(memory: Memory, n_queries: int, variants: list[str], warm_up: int =
 
 
 def run(n_memories, *, data_dir=None, n_queries=1000, disable_cache=True,
-    fast_seed=False, json_out=False, enable_embeddings: bool | str = "auto") -> dict:
+    fast_seed=False, json_out=False, enable_embeddings: bool | str = "auto",
+    backend: str = "sqlite", backend_opts: dict | None = None) -> dict:
     global _JSON_OUTPUT
     _JSON_OUTPUT = json_out
     templates = _get_templates()
@@ -218,16 +234,18 @@ def run(n_memories, *, data_dir=None, n_queries=1000, disable_cache=True,
 
     try:
         memory = Memory(
+            backend=backend,
             persist_dir=dir_path,
             collection_name=f"stress_{n_memories}",
             enable_embeddings=enable_embeddings,
+            **(backend_opts or {}),
         )
         if disable_cache:
             memory.retriever._cache._maxsize = 0  # type: ignore[attr-defined]
 
         if not json_out:
             print(f"\n{'='*62}")
-            print(f"  STRESS TEST  {n_memories:,} memories  "
+            print(f"  STRESS TEST  {backend}  {n_memories:,} memories  "
                   f"({'no cache' if disable_cache else 'with cache'}"
                   f"{', fast-seed' if fast_seed else ''})")
             print(f"{'='*62}")
@@ -247,6 +265,7 @@ def run(n_memories, *, data_dir=None, n_queries=1000, disable_cache=True,
 
         stats = _measure(memory, n_queries, variants)
         result = {
+            "backend": backend,
             "n_memories": n_memories, "actual_count": count,
             "semantic_search_enabled": bool(
                 getattr(memory.store, "semantic_search_enabled", False)
@@ -273,7 +292,7 @@ def run(n_memories, *, data_dir=None, n_queries=1000, disable_cache=True,
 def _report(r: dict) -> None:
     psutil_note = "" if _PSUTIL else " (install psutil for metrics)"
     print(f"\n{'─'*62}")
-    print(f"  {r['n_memories']:,} memories{psutil_note}")
+    print(f"  {r.get('backend', 'sqlite')}  {r['n_memories']:,} memories{psutil_note}")
     print(f"{'─'*62}")
     print(f"  Seed:      {r['actual_count']:,} entries  {r['seed_s']:.1f}s  {r['seed_rate']:,.0f}/s")
     print(f"  Seed CPU:  {r['seed_cpu_s']:.1f}s user  |  "
@@ -291,6 +310,27 @@ def _report(r: dict) -> None:
     print(f"{'─'*62}")
 
 
+def _parse_opts(pairs: list[str]) -> dict:
+    """Turn ``key=value`` CLI pairs into constructor kwargs, coercing scalars.
+
+    Backend constructors take ints and bools (``port``, ``db``), which argparse
+    hands over as strings; passing those through unconverted would make
+    ``port=6333`` a TypeError deep inside a driver.
+    """
+    opts: dict = {}
+    for pair in pairs:
+        if "=" not in pair:
+            raise SystemExit(f"--backend-opt expects KEY=VALUE, got {pair!r}")
+        key, _, raw = pair.partition("=")
+        value: object = raw
+        if raw.lower() in ("true", "false"):
+            value = raw.lower() == "true"
+        elif raw.lstrip("-").isdigit():
+            value = int(raw)
+        opts[key.strip()] = value
+    return opts
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--memories",  type=int, default=10_000)
@@ -305,13 +345,26 @@ def main() -> None:
         default="auto",
         help="embedding mode: auto (default), on, or off",
     )
+    p.add_argument(
+        "--backend",
+        default="sqlite",
+        help="storage backend to measure (default: sqlite)",
+    )
+    p.add_argument(
+        "--backend-opt",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="backend constructor argument; repeatable (e.g. url=redis://localhost:6379/0)",
+    )
     p.add_argument("--json",      action="store_true")
     args = p.parse_args()
     random.seed(42)
     embedding_mode: bool | str = {"auto": "auto", "on": True, "off": False}[args.embeddings]
     run(args.memories, data_dir=args.data_dir, n_queries=args.queries,
         disable_cache=not args.cache, fast_seed=args.fast_seed, json_out=args.json,
-        enable_embeddings=embedding_mode)
+        enable_embeddings=embedding_mode,
+        backend=args.backend, backend_opts=_parse_opts(args.backend_opt))
 
 
 if __name__ == "__main__":

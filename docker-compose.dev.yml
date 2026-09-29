@@ -1,9 +1,13 @@
 # docker-compose.dev.yml
 #
-# Development infrastructure: Redis + PostgreSQL
+# Development infrastructure: Redis + PostgreSQL + Qdrant
 #
 # Start all services:   docker compose -f docker-compose.dev.yml up -d
 # Stop + wipe volumes:  docker compose -f docker-compose.dev.yml down -v
+#
+# Every image here ships the vector index its backend wants, so semantic search
+# works out of the box: Redis 8 bundles the query engine (RediSearch), the
+# postgres service uses the pgvector image, and Qdrant is vector-native.
 #
 # After starting, point the SDK at the services via env vars:
 #
@@ -13,15 +17,22 @@
 #   AGENT_MEMORY_BACKEND=postgres
 #   AGENT_MEMORY_POSTGRES_DSN=postgresql://agent_memory:agent_memory@localhost:5432/agent_memory
 #
+#   AGENT_MEMORY_BACKEND=qdrant
+#   AGENT_MEMORY_QDRANT_URL=http://localhost:6333
+#
 # See .env.example for the full variable reference.
 
 services:
 
   # --------------------------------------------------------------------------
   # Redis – used by the Redis memory backend
+  #
+  # redis:8 bundles RediSearch in the core image, which is what the backend's
+  # HNSW vector index needs. On Redis 7 or plain OSS builds the backend still
+  # works, but search() silently degrades to BM25.
   # --------------------------------------------------------------------------
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: agent_memory_redis
     ports:
       - "${REDIS_PORT:-6379}:6379"
@@ -41,9 +52,13 @@ services:
 
   # --------------------------------------------------------------------------
   # PostgreSQL – used by the Postgres memory backend
+  #
+  # The pgvector image is a drop-in superset of the official postgres image; it
+  # just also carries the `vector` extension, so the backend can build its HNSW
+  # KNN index instead of falling back to keyword-only search.
   # --------------------------------------------------------------------------
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: agent_memory_postgres
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
@@ -61,23 +76,20 @@ services:
     restart: unless-stopped
 
   # --------------------------------------------------------------------------
-  # pgvector – Postgres with pgvector extension pre-installed
-  # Swap the postgres service image for this one when you want vector search.
+  # Qdrant – used by the Qdrant memory backend
+  # 6333 serves REST (and the dashboard at /dashboard), 6334 serves gRPC.
   # --------------------------------------------------------------------------
-  # pgvector:
-  #   image: pgvector/pgvector:pg16
-  #   container_name: agent_memory_pgvector
-  #   ports:
-  #     - "${POSTGRES_PORT:-5432}:5432"
-  #   environment:
-  #     POSTGRES_USER: ${POSTGRES_USER:-agent_memory}
-  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent_memory}
-  #     POSTGRES_DB: ${POSTGRES_DB:-agent_memory}
-  #   volumes:
-  #     - pgvector_data:/var/lib/postgresql/data
-  #   restart: unless-stopped
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: agent_memory_qdrant
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
 
 volumes:
   redis_data:
   postgres_data:
-  # pgvector_data:
+  qdrant_data:

@@ -12,7 +12,7 @@ flowchart TD
     M --> API["FastAPI REST server\nagent-memory-api\n[api]"]
     M --> DASH["Streamlit dashboard\nagent-memory-dashboard\n[dashboard]"]
     M --> MA["Multi-agent\nMultiAgentMemory\n(NAMESPACED · SHARED · ISOLATED)"]
-    M --> BE["Backends\nSQLite · ChromaDB\nRedis · Postgres"]
+    M --> BE["Backends\nSQLite · ChromaDB\nRedis · Postgres · Qdrant"]
 
     style M fill:#4f46e5,color:#fff
     style LC fill:#1e3a5f,color:#fff
@@ -34,6 +34,7 @@ flowchart TD
 | [llamaindex_integration.py](llamaindex_integration.py) | `[llamaindex]` | `python examples/llamaindex_integration.py` |
 | [redis_backend.py](redis_backend.py) | `[redis]` | Needs Redis — see below |
 | [postgres_backend.py](postgres_backend.py) | `[postgres]` | Needs Postgres — see below |
+| [qdrant_backend.py](qdrant_backend.py) | `[qdrant]` | Needs Qdrant — see below |
 | [multi_agent.py](multi_agent.py) | *(none)* | `python examples/multi_agent.py` |
 | [rest_api.py](rest_api.py) | `[api]` | Needs server — see below |
 | [confidence_and_graph.py](confidence_and_graph.py) | *(none)* | `python examples/confidence_and_graph.py` |
@@ -85,6 +86,16 @@ docker compose -f docker-compose.dev.yml up -d postgres
 
 pip install "agent-memory-sdk[postgres]"
 python examples/postgres_backend.py
+```
+
+### Qdrant backend
+
+```bash
+# Start Qdrant
+docker compose -f docker-compose.dev.yml up -d qdrant
+
+pip install "agent-memory-sdk[qdrant,semantic]"
+python examples/qdrant_backend.py
 ```
 
 ### REST API server
@@ -154,9 +165,12 @@ msgs = li_memory.get(input="API rate limits?")
 ### [redis_backend.py](redis_backend.py)
 Uses Redis as the storage engine instead of SQLite. Identical API — only the constructor changes.
 
-- Sub-millisecond reads for frequently accessed memories
+- The lowest-latency server backend (see [benchmarks](../docs/benchmarks.md))
 - Keys namespaced under a configurable prefix
-- BM25 keyword search (Python-side, no Redis module required)
+- RediSearch HNSW vector KNN when the server has the module (Redis 8+ / Redis
+  Stack, db 0) and `[semantic]` is installed — and the same index serves the
+  keyword half, so neither pass reads the corpus into Python
+- Python BM25 as the fallback — plain Redis needs no module at all
 
 ```python
 from agent_memory import Memory
@@ -172,7 +186,8 @@ d = memory.resolve("I forgot my password")
 Uses PostgreSQL with `tsvector` full-text search. Scope-aware queries map cleanly to SQL WHERE clauses.
 
 - `tsvector` GIN index for fast keyword search
-- Optional pgvector KNN for semantic search (install `[pgvector]`)
+- pgvector HNSW KNN for semantic search (install `[pgvector]`), auto-selected
+  over IVFFlat on pgvector ≥ 0.7.0
 - Scope filtering pushed to SQL — no Python-side filtering
 
 ```python
@@ -181,6 +196,29 @@ from agent_memory import Memory, MemoryScope
 memory = Memory(backend="postgres", dsn="postgresql://user:pw@localhost/mydb")
 memory.remember("deadline", "Ships Friday", scope=MemoryScope.PROJECT)
 d = memory.resolve("When is the deadline?", scope=[MemoryScope.PROJECT])
+```
+
+---
+
+### [qdrant_backend.py](qdrant_backend.py)
+Uses Qdrant, a purpose-built vector database, for collections past the point where
+SQLite or Postgres keeps up. Qdrant publishes limits far beyond anything this
+repo has measured — see [benchmarks](../docs/benchmarks.md) for what we actually
+ran (2,000 entries across all backends, 20,000 for the pgvector index).
+
+- Qdrant HNSW graph over the whole corpus; `ef_search` trades latency for recall
+- Hybrid retrieval: dense KNN plus BM25 over candidates narrowed by Qdrant's
+  full-text payload index, fused with RRF
+- Scope, type, archived and TTL filters run server-side on payload indexes
+- The entry lives in the point payload, so there is no second store to sync
+- `path="./qdrant_data"` runs embedded, with no server at all
+
+```python
+from agent_memory import Memory
+
+memory = Memory(backend="qdrant", url="http://localhost:6333", restore_threshold=0.55)
+memory.remember("password reset", "Settings → Security → Reset Password.")
+d = memory.resolve("I can't get into my account anymore")
 ```
 
 ---

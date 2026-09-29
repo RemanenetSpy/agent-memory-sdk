@@ -28,7 +28,7 @@ flowchart LR
 
     subgraph Storage["Storage"]
         direction TB
-        DB[(SQLite / Redis\nPostgres / ChromaDB)]
+        DB[(SQLite / Redis\nPostgres / Qdrant / ChromaDB)]
     end
 
     subgraph Output["Output"]
@@ -58,8 +58,9 @@ flowchart LR
 |--------|---------------|-----------|
 | `store.py` | Abstract backend interface | `MemoryStore` (ABC) |
 | `sqlite_store.py` | SQLite + FTS5 + optional sqlite-vec | `SqliteMemoryStore` |
-| `redis_store.py` | Redis backend (JSON + sorted-set index) | `RedisMemoryStore` |
-| `postgres_store.py` | Postgres + tsvector + optional pgvector | `PostgresMemoryStore` |
+| `redis_store.py` | Redis backend (JSON + sorted-set index + RedisVSS HNSW) | `RedisMemoryStore` |
+| `postgres_store.py` | Postgres + tsvector + pgvector HNSW / IVFFlat | `PostgresMemoryStore` |
+| `qdrant_store.py` | Qdrant backend (HNSW KNN + full-text payload index) | `QdrantMemoryStore` |
 | `retriever.py` | Hybrid BM25 + vector → RRF fusion + cache | `MemoryRetriever`, `FusionStrategy` |
 | `policy.py` | Multi-factor scoring | `DefaultPolicy`, `DecisionPolicy` (ABC) |
 | `decision.py` | Action selection and logging | `DecisionEngine` |
@@ -145,8 +146,9 @@ All backends implement `MemoryStore` (ABC). They are interchangeable — the ret
 |---------|---------------|--------------|-------|
 | SQLite | FTS5 BM25 + coverage | sqlite-vec KNN (optional) | Default; WAL mode; thread-local conn cache |
 | ChromaDB | Python BM25 | Chroma built-in | For existing ChromaDB deployments |
-| Redis | Python BM25 | — | Sub-ms reads; no persistence by default |
-| PostgreSQL | tsvector GIN | pgvector (optional) | Production SQL; SQL aggregates |
+| Redis | RediSearch BM25 (Python fallback) | RediSearch HNSW (Redis 8+ / Stack, db 0) | Shared state; fastest server backend |
+| PostgreSQL | tsvector GIN | pgvector HNSW, IVFFlat below 0.7.0 | Production SQL; SQL aggregates |
+| Qdrant | Qdrant full-text index + Python BM25 | Qdrant HNSW | Dedicated vector tier, for a corpus past what SQLite or Postgres serves |
 
 ---
 

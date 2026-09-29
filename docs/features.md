@@ -57,17 +57,84 @@ flowchart TD
 | `sqlite` *(default)* | *(none)* | FTS5 BM25 + coverage scaling | Zero-setup, fast, no server |
 | `sqlite` + vectors | `[semantic]` | sqlite-vec KNN + FTS5 hybrid | Paraphrase robustness without a server |
 | `chromadb` | *(bundled)* | Vector embeddings + Python BM25 | Existing ChromaDB deployments |
-| `redis` | `[redis]` | Python BM25 (sorted-set index) | Sub-millisecond reads, shared state |
-| `postgres` | `[postgres]` | tsvector FTS + optional pgvector | Production SQL databases |
+| `redis` | `[redis]` | RedisVSS HNSW KNN + RediSearch BM25 | Shared state across processes, fastest server backend |
+| `postgres` | `[postgres]` | tsvector FTS + pgvector HNSW KNN | Production SQL databases |
+| `qdrant` | `[qdrant]` | Qdrant HNSW KNN + full-text BM25 | A corpus past what a general-purpose database serves; dedicated vector tier |
 
-Start Redis + Postgres locally:
+Start every service locally:
 
 ```bash
 docker compose -f docker-compose.dev.yml up -d
 ```
 
+### Vector search per backend
+
+Every backend's `search()` needs two things to be genuinely semantic: an
+embedding model (`[semantic]`) and a vector index on the server side. Miss either
+and `search()` silently becomes `keyword_search()` — check
+`memory.store.semantic_search_enabled` to see which path you are on.
+
+| Backend | Index | Server requirement | Without it |
+|---------|-------|--------------------|------------|
+| `sqlite` | sqlite-vec `vec0`, cosine | `[semantic]` extra only | Lexical FTS5 |
+| `redis` | RediSearch HNSW (`m=16`, `ef_construction=200`) | Redis 8+ or Redis Stack, **db 0** | Python BM25 |
+| `postgres` | pgvector `hnsw` (`m=16`, `ef_construction=64`), IVFFlat below pgvector 0.7 | `CREATE EXTENSION vector` | tsvector FTS |
+| `qdrant` | Qdrant HNSW (`m=16`, `ef_construct=100`) | Vector-native, nothing to enable | Payload-only collection, BM25 |
+
+Postgres picks its index at init: HNSW when the server's pgvector is ≥ 0.7.0,
+IVFFlat otherwise. Unlike IVFFlat, HNSW accepts online inserts and does not need
+a populated table at build time, and its latency stays roughly flat as the corpus
+grows where IVFFlat's climbs linearly — [measured
+here](benchmarks.md#pgvector-hnsw-vs-ivfflat). Force either with
+`PostgresMemoryStore(vector_index="hnsw" | "ivfflat")`; an existing IVFFlat index
+is dropped when HNSW replaces it, so the column never carries two indexes.
+
+### Tuning the index
+
+All three HNSW backends take the same config object, so the knobs do not change
+shape when you change backend. Defaults are each engine's own recommendation —
+pass nothing and nothing changes.
+
+```python
+from agent_memory import Memory, VectorIndexConfig
+
+# ef_search is the cheap knob: query-time only, nothing to rebuild.
+Memory(backend="qdrant", vector_config=VectorIndexConfig(ef_search=512))
+
+# m / ef_construction shape the graph itself, so they apply when it is built.
+Memory(backend="redis", vector_config=VectorIndexConfig(m=32, ef_construction=400))
+```
+
+| Field | Default | Effect |
+|---|---|---|
+| `m` | 16 | Graph out-degree. Higher = better recall and faster search, larger index, slower build. |
+| `ef_construction` | 64–200 (per engine) | Build-time candidate list. Higher = permanently better recall, slower inserts. |
+| `ef_search` | 64 (128 on Qdrant) | Query-time candidate list. The knob to reach for when a filtered query returns fewer hits than it should. |
+| `overfetch` / `min_candidates` | 4 / 20 | How much deeper than `top_k` to pull, so Python-side expiry filtering still leaves `top_k` survivors. |
+
+Postgres additionally takes `ivfflat_config=IvfFlatConfig(lists=…, probes=…)` for
+servers below pgvector 0.7. Scale `lists` with row count (pgvector suggests
+`rows / 1000`) and keep `probes` well under it — at `probes == lists` every list
+is visited and the index degenerates into a brute-force scan.
+
+Read `store.vector_config` to see what a store is actually using.
+
+### Adding a backend
+
+Backends resolve through a registry, so a custom store needs no change to the SDK:
+
+```python
+from agent_memory import Memory, register_backend
+
+register_backend("mystore", lambda ctx: MyStore(**ctx.kwargs))
+Memory(backend="mystore", host="…")     # kwargs reach the factory verbatim
+```
+
+`available_backends()` lists what is registered. Factories import their driver
+lazily, so `import agent_memory` never pulls in psycopg2 or qdrant-client.
+
 > **Honesty note:** Without `[semantic]`, sqlite's search is lexical. Paraphrases with no shared words
-> need `[semantic]` or `chromadb`.
+> need `[semantic]`, `chromadb`, or one of the vector-indexed server backends above.
 
 ---
 

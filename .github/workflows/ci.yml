@@ -68,11 +68,23 @@ jobs:
         run: python -m pytest tests/ -v --tb=short
 
   test-redis:
-    # Exercises the optional Redis backend via fakeredis (no real server needed).
+    # Exercises the optional Redis backend: CRUD / BM25 via fakeredis, and the
+    # RedisVSS vector path against a real Redis 8 (which bundles RediSearch).
     runs-on: ubuntu-latest
     needs: test
     permissions:
       contents: read
+
+    services:
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout
@@ -84,13 +96,16 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Install dependencies with Redis extras
+      - name: Install dependencies with Redis + semantic extras
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,redis]"
+          pip install -e ".[dev,redis,semantic]"
           pip install fakeredis
 
       - name: Run Redis backend tests
+        env:
+          # Must be db 0 — RediSearch cannot index any other database.
+          AGENT_MEMORY_TEST_REDIS_URL: "redis://localhost:6379/0"
         run: python -m pytest tests/test_redis_store.py -v --tb=short
 
   test-api:
@@ -119,7 +134,8 @@ jobs:
         run: python -m pytest tests/test_api.py -v --tb=short
 
   test-postgres:
-    # Exercises the optional Postgres backend with a real server.
+    # Exercises the optional Postgres backend with a real server, including the
+    # pgvector HNSW KNN path (hence the pgvector image, not stock postgres).
     runs-on: ubuntu-latest
     needs: test
     permissions:
@@ -127,7 +143,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -150,15 +166,62 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Install dependencies with Postgres extras
+      - name: Install dependencies with Postgres + pgvector + semantic extras
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,postgres]"
+          pip install -e ".[dev,postgres,pgvector,semantic]"
 
       - name: Run Postgres backend tests
         env:
           AGENT_MEMORY_POSTGRES_DSN: "postgresql://postgres:postgres@localhost/agent_memory_test"
-        run: python -m pytest tests/test_postgres_store.py -v --tb=short
+        run: |
+          python -m pytest \
+            tests/test_postgres_store.py \
+            tests/test_postgres_identifier.py \
+            -v --tb=short
+
+  test-qdrant:
+    # Exercises the Qdrant backend against a real server: HNSW KNN, full-text
+    # BM25, and the server-side scope / TTL payload filters.
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+
+    services:
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies with Qdrant extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,qdrant,semantic]"
+
+      - name: Wait for Qdrant
+        run: |
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:6333/readyz > /dev/null && exit 0
+            sleep 2
+          done
+          echo "Qdrant did not become ready" >&2
+          exit 1
+
+      - name: Run Qdrant backend tests
+        env:
+          AGENT_MEMORY_TEST_QDRANT_URL: "http://localhost:6333"
+        run: python -m pytest tests/test_qdrant_store.py -v --tb=short
 
   test-features:
     # Tests for graph, confidence, multi-agent, benchmarks, and adapters.
