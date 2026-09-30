@@ -55,9 +55,16 @@ def main() -> None:
     )
 
     queries = [
+        # Expected action: REPLAY — return the stored response directly.
         "How do I reset my password?",
+
+        # Expected action: RESTORE — restore relevant context, then call the LLM.
         "Give me a one-sentence explanation of password reset",
+
+        # Expected action: VERIFY — verify the stored information, then call the LLM.
         "What is the API rate limit?",
+
+        # Expected action: NONE — no useful memory, so call the LLM directly.
         "What's the weather today?",
     ]
 
