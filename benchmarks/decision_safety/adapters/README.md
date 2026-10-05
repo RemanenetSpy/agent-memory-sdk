@@ -10,13 +10,17 @@ Each adapter implements the [`DecisionSafetyAdapter`](base.py) base contract, tr
 |---|---|---|---|
 | [`agent_memory_adapter.py`](agent_memory_adapter.py) | Agent Memory SDK | Local / Embedded SQLite | Canonical Reference Implementation |
 | [`mem0_adapter.py`](mem0_adapter.py) | Mem0 | Self-Hosted | Stub awaiting maintainer configuration confirmation ([mem0#7453](https://github.com/mem0ai/mem0/issues/7453)) |
-| [`smriti_adapter.py`](smriti_adapter.py) | Smriti Bi-Temporal Knowledge Engine | Hosted API (`smriti-engine:v1.2.0`) | Reference Implementation for Bi-Temporal Track ([Issue #44](https://github.com/theprodsde/agent-memory-sdk/issues/44)) |
+| [`smriti_adapter.py`](smriti_adapter.py) | [Smriti Bi-Temporal Knowledge Engine](https://github.com/RemanenetSpy/smriti-kaal-mcp) | Hosted API (`smriti-engine:v1.2.0`) / [smriti-kaal.vercel.app](https://smriti-kaal.vercel.app) | Reference Implementation for Bi-Temporal Track ([Issue #44](https://github.com/theprodsde/agent-memory-sdk/issues/44)) |
 
 ---
 
 ## Smriti Adapter Specification
 
 The `SmritiAdapter` integrates Smriti's bi-temporal Subject-Verb-Object (SVO) knowledge graph engine with the decision-safety benchmark tracks.
+
+- **Repository:** [`RemanenetSpy/smriti-kaal-mcp`](https://github.com/RemanenetSpy/smriti-kaal-mcp)
+- **PyPI Package:** [`smriti-kaal-mcp`](https://pypi.org/project/smriti-kaal-mcp/)
+- **Documentation & Live Service:** [`https://smriti-kaal.vercel.app`](https://smriti-kaal.vercel.app)
 
 ### 1. Capability Declarations
 
@@ -80,6 +84,7 @@ pytest tests/test_smriti_adapter.py -v
 To run against a live Smriti service instance:
 
 ```bash
-export SMRITI_API_URL="https://api.smriti.ai"
+# Service endpoint and docs: https://smriti-kaal.vercel.app
+export SMRITI_API_URL="https://smriti-kaal.vercel.app/api"
 export SMRITI_API_KEY="your-api-key"
 ```
